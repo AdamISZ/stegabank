@@ -1,0 +1,3 @@
+content     sample    chrome/content/
+skin	sample	classic/1.0	chrome/skin/
+overlay chrome://browser/content/browser.xul chrome://sample/content/sample.xul
