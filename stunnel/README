@@ -1,0 +1,16 @@
+Here is how you setup a stunnel-wrapped ssh tunnel.
+(Assuming there is a remote server running sshd) 
+
+On buyer's machine:
+Firefox add a SOCKS5 proxy localhost:33308
+compile and launch "stunnel buyer.conf"
+ssh user@remoteserver -L 33309:localhost:10407 (10407 arbitrary port on the server)
+
+On seller/gateway's machine:
+compile and launch "stunnel seller.conf"
+ssh user2@remoteserver -R 10407:localhost:33310
+launch squid (it listens on port 3128 by default)
+
+P.S.
+change cert= path in buyer/seller.conf
+use stunnel.pem only for testing. Generate your own pem for safe measure.
