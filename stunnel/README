@@ -2,7 +2,7 @@ Here is how you setup a stunnel-wrapped ssh tunnel.
 (Assuming there is a remote server running sshd) 
 
 On buyer's machine:
-Firefox add a SOCKS5 proxy localhost:33308
+Firefox add a HTTP/HTTPS proxy localhost:33308
 compile and launch "stunnel buyer.conf"
 ssh user@remoteserver -L 33309:localhost:10407 (10407 arbitrary port on the server)
 
