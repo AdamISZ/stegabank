@@ -14,3 +14,11 @@ launch squid (it listens on port 3128 by default)
 P.S.
 change cert= path in buyer/seller.conf
 use stunnel.pem only for testing. Generate your own pem for safe measure.
+
+
+P.P.S
+To generate a certificate manually:
+
+openssl genrsa -out seller.key 4096
+openssl req -new -key seller.key -out req.pem -subj /C=bt/ST=bt/L=Springfield/O=bt/CN=bt
+openssl req -x509 -key seller.key -in req.pem -out seller.pem -days 365

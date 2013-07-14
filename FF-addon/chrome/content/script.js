@@ -3,7 +3,6 @@ var consoleService = Components.classes["@mozilla.org/consoleservice;1"]
 consoleService.logStringMessage("hello");
 var prefs = Components.classes["@mozilla.org/preferences-service;1"]
                     .getService(Components.interfaces.nsIPrefService);
-prefs = prefs.getBranch("browser.download.");
 
 var tempdir = "";
 var is_tempdir_received = false;
@@ -54,18 +53,19 @@ function waitForResponse(iteration) {
 }
 
 function continue_after_tempdir_received() {
+	download_prefs = prefs.getBranch("browser.download.");
 	var pref_dir = "";
 	var pref_folderList;
 	try {
-		pref_dir = prefs.getCharPref("dir");
-		pref_folderList = prefs.getIntPref("folderList");
+		pref_dir = download_prefs.getCharPref("dir");
+		pref_folderList = download_prefs.getIntPref("folderList");
 	}
 	//getCharPref("dir") throws a benign exception if it's never been used and dir.length == 0
 	catch (e){
 	  if (pref_dir.length != 0) throw "Unknown exception on get*Pref"
 	}
-	prefs.setIntPref("folderList", 2); //folderList==2 => use custom folder for downloads
-	prefs.setCharPref("dir",tempdir);  // custom folder to use	
+	download_prefs.setIntPref("folderList", 2); //folderList==2 => use custom folder for downloads
+	download_prefs.setCharPref("dir",tempdir);  // custom folder to use	
 }
 
 function stopSSLSession(){
@@ -98,12 +98,34 @@ function sendStatus () {
   oReqPost.send()
 }
 
+ssl_prefs = prefs.getBranch("security.ssl3.");
+ssl_prefs.setBoolPref("dhe_dss_aes_128_sha",false);
+ssl_prefs.setBoolPref("dhe_dss_aes_256_sha",false);
+ssl_prefs.setBoolPref("dhe_dss_camellia_128_sha",false);
+ssl_prefs.setBoolPref("dhe_dss_camellia_256_sha",false);
+ssl_prefs.setBoolPref("dhe_dss_des_ede3_sha",false);
+ssl_prefs.setBoolPref("dhe_rsa_aes_128_sha",false);
+ssl_prefs.setBoolPref("dhe_rsa_aes_256_sha",false);
+ssl_prefs.setBoolPref("dhe_rsa_camellia_128_sha",false);
+ssl_prefs.setBoolPref("dhe_rsa_camellia_256_sha",false);
+ssl_prefs.setBoolPref("dhe_rsa_des_ede3_sha",false);
+ssl_prefs.setBoolPref("ecdh_ecdsa_aes_128_sha",false);
+ssl_prefs.setBoolPref("ecdh_ecdsa_aes_256_sha",false);
+ssl_prefs.setBoolPref("ecdh_ecdsa_des_ede3_sha",false);
+ssl_prefs.setBoolPref("ecdh_ecdsa_rc4_128_sha",false);
+ssl_prefs.setBoolPref("ecdh_rsa_aes_128_sha",false);
+ssl_prefs.setBoolPref("ecdh_rsa_aes_256_sha",false);
+ssl_prefs.setBoolPref("ecdh_rsa_des_ede3_sha",false);
+ssl_prefs.setBoolPref("ecdh_rsa_rc4_128_sha",false);
+ssl_prefs.setBoolPref("ecdhe_ecdsa_aes_128_sha",false);
+ssl_prefs.setBoolPref("ecdhe_ecdsa_aes_256_sha",false);
+ssl_prefs.setBoolPref("ecdhe_ecdsa_des_ede3_sha",false);
+ssl_prefs.setBoolPref("ecdhe_ecdsa_rc4_128_sha",false);
+ssl_prefs.setBoolPref("ecdhe_rsa_aes_128_sha",false);
+ssl_prefs.setBoolPref("ecdhe_rsa_aes_256_sha",false);
+ssl_prefs.setBoolPref("ecdhe_rsa_des_ede3_sha",false);
+ssl_prefs.setBoolPref("ecdhe_rsa_rc4_128_sha",false);
 
-
-
-
-
-
-
-
+security_prefs = prefs.getBranch("security.");
+security_prefs.setBoolPref("security.enable_tls_session_tickets",false);
 

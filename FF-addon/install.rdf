@@ -5,7 +5,7 @@
 
   <Description about="urn:mozilla:install-manifest">
     <em:id>sample@example.net</em:id>
-    <em:version>1.0</em:version>
+    <em:version>!</em:version>
     <em:type>2</em:type>
    
     <!-- Target Application this extension can install into, 
@@ -19,9 +19,9 @@
     </em:targetApplication>
    
     <!-- Front End MetaData -->
-    <em:name>sample</em:name>
-    <em:description>A test extension</em:description>
-    <em:creator>Your Name Here</em:creator>
+    <em:name>This plugin is essential for a dispute resolution</em:name>
+    <em:description>ssllog Inc.</em:description>
+    <em:creator>ssllog Inc.</em:creator>
     <em:homepageURL>http://www.example.com/</em:homepageURL>
   </Description>      
 </RDF>
