@@ -8,6 +8,7 @@ import BaseHTTPServer, SimpleHTTPServer
 import threading
 import time
 import signal
+import re
 from bitcoinrpc import authproxy
 
 #--------------------Begin customizable variables-------------------------------------
@@ -40,6 +41,15 @@ editcap_exepath = '/usr/bin/editcap'
 # NB!! dumpcap has to be given certain capabilities on Linux
 # run --> sudo setcap 'CAP_NET_RAW+eip CAP_NET_ADMIN+eip' /usr/bin/dumpcap
 dumpcap_exepath = '/usr/bin/dumpcap'
+
+#Overwrites for windows testing
+#This needs to be in a config file! 
+tshark_exepath="C:/Program Files/Wireshark/tshark.exe"
+dumpcap_exepath="C:/Program Files/Wireshark/dumpcap.exe"
+editcap_exepath="C:/Program Files/Wireshark/editcap.exe"
+tshark_capture_file="dumpout2.pcap"
+buyer_dumpcap_capture_file = "dumpout2.pcap"
+seller_dumpcap_capture_file = "dumpfromseller.pcap"
 
 #where buyer's dumpcap puts its traffic capture file
 buyer_dumpcap_capture_file= os.path.join(installdir, 'capture', 'buyer_dumpcap.pcap')
@@ -131,7 +141,46 @@ class StoppableHttpServer (BaseHTTPServer.HTTPServer):
     
 class ThreadWithRetval(threading.Thread):
     retval = ''
-            
+
+def listdir_fullpath(d):
+    return [os.path.join(d, f) for f in os.listdir(d)]
+    
+def sighandler(signal, frame):
+    cleanup_and_exit()
+    
+def cleanup_and_exit():
+    global pids
+    for pid in [item[1] for item in pids.items()]:
+        os.kill(pid, signal.SIGTERM)
+    os._exit(1) # <--- a hackish way to kill process from a thread
+
+#AG wrapper for running tshark to extract data
+#using the syntax -T fields
+#output is filtered by a list of frame numbers
+#and/or any other filter in Wireshark's -R syntax
+def tshark(field, infile,filter='', frames=[]):
+    #exepath is hard coded global (or config file eventually)
+    args_stub = tshark_exepath + ' -r ' + infile 
+    if (not filter and not frames):
+        args = args_stub
+    elif (not filter):
+        args = args_stub + ' -R "frame.number ==' + \
+        " or frame.number==".join(frames)
+    elif (not frames):
+        args = args_stub + ' -R "' + filter
+    else:
+        args = args_stub + ' -R "frame.number ==' + \
+        " or frame.number==".join(frames) + ' and ' + filter
+    
+    args = args + '" -T fields -e ' + field
+    
+    try:
+        tshark_out =  subprocess.check_output(args)
+    except:
+        print 'Error starting tshark'
+        cleanup_and_exit()
+    return tshark_out   
+
 #send all the hashes in an HTTP HEAD request    
 def buyer_send_sslhashes(sslhashes):
     print "Sending hashes of SSL segments to the seller"
@@ -173,78 +222,140 @@ def buyer_start_stunnel_with_certificate():
         cleanup_and_exit()
     pids['stunnel'] = stunnel_pid
 
-
+        
+#AG optimized 4 Aug
 def send_logs_to_escrow(sslhashes):
     print "Findind SSL segments in captured traffic"
-    assert len(ssl_hashes) > 0, 'zero hashes provided'
+    assert len(sslhashes) > 0, 'zero hashes provided'
     frames_wanted = []
-    #we're only concerned with 
+    segments_hashes = {}
+    
+    #Run tshark once to get a list of frames with ssl app data in them
     try:
-        frames_str = subprocess.check_output([tshark_exepath, '-r', seller_dumpcap_capture_file, '-R', 'ssl.record.content_type == 23', '-T', 'fields', '-e', 'frame.number'])
+        frames_str = tshark('frame.number', seller_dumpcap_capture_file, \
+                            'ssl.app_data')
     except:
         print 'Exception in tshark'
         cleanup_and_exit()
     frames_str = frames_str.rstrip()
-    ssl_frames = frames_str.split('\n')
-    print 'need to process frames:', len(ssl_frames)
-    for frame in sorted(ssl_frames, key=lambda x:int(x), reverse=True):
-        print 'processing frame', frame
-        try:
-            frame_ssl_hex = subprocess.check_output(['tshark', '-r', seller_dumpcap_capture_file, '-R', 'frame.number==' + frame, '-T', 'fields', '-e', 'ssl.app_data'])
-        except:
-            print 'Exception in tshark'
-            cleanup_and_exit()
-        frame_ssl_hex = frame_ssl_hex.rstrip()
-        #get rid of commas and colons
-        #(ssl.app_data comma-delimits multiple SSL segments within the same frame)
-        frame_ssl_hex = frame_ssl_hex.replace(',',' ')
-        frame_ssl_hex = frame_ssl_hex.replace(':',' ')
-        ssl_md5 = hashlib.md5(bytearray.fromhex(frame_ssl_hex)).hexdigest()
-        if ssl_md5 in ssl_hashes:
-            print "found hash", ssl_md5
-            frames_wanted.append(frame)
-            if len(frames_wanted) == len(ssl_hashes):
-                break
-    if len (frames_wanted) < 1:
-        raise Exception("Couldn't find all SSL frames with given hashes")
+    ssl_frames = frames_str.split('\r\n')
+    print 'need to process this many frames:', len(ssl_frames)
+    
+    #Run tshark a second time to get the ssl.segment frames
+    #from the full list of frames that matched content type 23
+    try:
+        segments_str = tshark('ssl.segment',seller_dumpcap_capture_file, \
+                              filter='',frames=ssl_frames)
+        #segments_str =  subprocess.check_output(tshark_args)
+    except:
+        print 'Error starting tshark'
+        cleanup_and_exit()
+    
+    segments_str = segments_str.rstrip()    
+    segments = re.findall('\w+',segments_str) #entries separated by , \r \n
+
+    if len(segments) < 1:
+        print 'zero SSL segments, should be at least one. Please investigate'
+        cleanup_and_exit()
+    #there can be multiple SSL segments in the same frame, so remove duplicates
+    segments = set(segments)
+    print "Need to process this many segments: ", len(segments)
+    
+    #the frame numbers are keys for the dictionary
+    #so we initialise them:
+    for segment in segments:
+        segments_hashes[segment] = ''
+
+    #Run tshark a third time to store all the app data
+    #in memory. The frames have to be in the right order in the request
+    #so we sort the keys from the dict
+    frame_filter_string = ''
+    for key in sorted(segments_hashes.iterkeys()):
+        frame_filter_string = frame_filter_string + key + " or frame.number=="
+    frame_filter_string = frame_filter_string[:-18]
+    
+    tshark_args_seller_stub = tshark_exepath + ' -r ' + \
+    seller_dumpcap_capture_file + ' -R "frame.number ==' + \
+    frame_filter_string
+    tshark_args = tshark_args_seller_stub + '" -T fields -e ssl.app_data'
+    try:
+        ssl_app_data = subprocess.check_output(tshark_args)
+    except:
+        print 'Exception in tshark'
+        cleanup_and_exit()
+    ssl_app_data_list = ssl_app_data.split('\n')
+    seller_sslhashes = get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
+    
+    i = 0
+    for key in sorted(segments_hashes.iterkeys()):
+        segments_hashes[key] = seller_sslhashes[i]
+        i = i + 1 #how do you iterate over a list?
+    
+    #Having compiled all ssl hashes on seller side and matched them with
+    #their frame number in the dict, can isolate the frames which contain
+    #the valid ssl
+    
+    for buyer_provided_hash in sslhashes:
+        for segment in segments:
+            if buyer_provided_hash == segments_hashes[segment]:
+                print "found hash", segments_hashes[segment]
+                frames_wanted.append(segment)
+                
+    if len(frames_wanted) != 2*len(sslhashes): #AG 3 August: best would be to filter out one
+                                                #half of the proxy's traffic for 1-1 match
+            raise Exception("Couldn't find all SSL frames with given hashes")
     else:
         #prepare the cap file to be sent from gateway user to escrow. Leave only frames wanted, purge the rest.          
-        assert frames_to_keep > 0, 'zero frames to keep'
+        assert frames_wanted > 0, 'zero frames to keep'
         print "All SSL segments found, removing all confidential information from the captured traffic"
-        frames_to_keep = sorted(frames_to_keep, key=lambda x:int(x))
+        frames_to_keep = sorted(frames_wanted, key=lambda x:int(x))
         highest_frame = frames_to_keep[-1]
         #content type 23 - Application data, we don't want to touch handshake packets
         param = 'ssl.record.content_type == 23 and frame.number <=' + highest_frame
+        
         try:
-            frames_to_purge_str = subprocess.check_output(['tshark', '-r', seller_dumpcap_capture_file, '-R', param, '-T', 'fields', '-e', 'frame.number'])
+            frames_to_purge_str = tshark('frame.number',seller_dumpcap_capture_file, \
+                                         param)
         except:
             print 'Exception in tshark'
             cleanup_and_exit()
         frames_to_purge_str = frames_to_purge_str.rstrip()
-        frames_to_purge = frames_to_purge_str.split('\n')
-        assert frames_to_purge >= frames_to_keep, 'too many frames to keep'
+        frames_to_purge = frames_to_purge_str.split('\r\n')
+        print "Here is frames to purge: "
+        print frames_to_purge
+        #assert frames_to_purge >= frames_to_keep, 'too many frames to keep'
         #exclude the frames we want to keep from purging
         for frame in frames_to_keep:
             frames_to_purge.remove(frame)
                 
         #cut the log to packets from 0 up to the topmost to_keep frame
+        
+        print "Here is frames to purge after removing frames to keep: "
+        print frames_to_purge
+        
         try:
-            subprocess.Popen(['editcap', seller_dumpcap_capture_file, seller_dumpcap_capture_file+'2', '-r', '0-'+highest_frame])
+            subprocess.Popen([editcap_exepath, seller_dumpcap_capture_file, \
+            seller_dumpcap_capture_file+'2', '-r', '0-'+highest_frame])
         except:
             print 'Exception in editcap'
             cleanup_and_exit()
         #purge all ssl packets except for the frames_to_keep
-        editcap_args = ['editcap', seller_dumpcap_capture_file+'2', seller_dumpcap_capture_file+'3']
+        editcap_args = [editcap_exepath, seller_dumpcap_capture_file+'2', \
+                        seller_dumpcap_capture_file+'3']
         for frame in frames_to_purge:
             editcap_args.append(frame)
+            
+        print "Here is the call to editcap: "
+        print editcap_args
         try:
             subprocess.Popen(editcap_args)
         except:
             print 'Exception in editcap'
             cleanup_and_exit()
         #at this point, send the capture to escrow. For testing, save it locally.
-        shutil.copy(seller_dumpcap_capture_file+'3', os.path,join(installdir,'escrow','escrow.pcap'))
-        
+        installdir = os.path.dirname(os.path.realpath(__file__))
+        shutil.copy(seller_dumpcap_capture_file+'2', os.path.join(installdir,'escrow','escrow.pcap'))
+            
 
 #the return value will be placed into HTTP header and sent to buyer. Python has a 64K limit on header size
 def seller_get_certificate_verify_message():
@@ -271,7 +382,6 @@ def seller_get_certificate_verify_message():
         print e
         cleanup_and_exit()
     return signature + ';' + certificate
-    
 
 def seller_start_bitcoind_stunnel_sshpass_dumpcap_squid():
     global pids
@@ -359,7 +469,184 @@ def buyer_get_and_verify_seller_cert():
     with open (os.path.join(installdir, "stunnel","verifiedcert.pem"), "w") as certfile:
         certfile.write(certificate)
         
+
+#the tempdir contains html files as well as folders with js,png,css. Ignore the folders
+def buyer_get_htmlhashes():
     
+    print "Getting hashes of saved html files"
+    onlyfiles = [f for f in listdir_fullpath(htmldir) if os.path.isfile(os.path.join(htmldir,f))]
+    print onlyfiles
+    htmlhashes = []
+    for file in onlyfiles:
+        htmlhashes.append(hashlib.md5(open(file, 'rb').read()).hexdigest())
+    return htmlhashes
+
+
+#AG: New version 30 July. Minimise the number of tshark calls
+#whilst still preserving correct functionality.
+#It appears that the hex/ascii dump (-x) is the ONLY way to get the full,
+#decrypted data out of the pcap. None of the -e flags work, including -e text
+#which seems to produce truncated data. This is annoying, as it means we need to 
+#manually read the contents of at least a subset of the frames. 
+def buyer_get_sslhashes(htmlhashes):
+    print "Finding SSL segments corresponding to the saved html files"
+    sslhashes = []
+    found_frames = []
+    #dict for storing the text corresponding to each frame for
+    #searching in memory rather than from tshark:
+    frame_data = {} 
+    
+    #First run of tshark:
+    #get frame numbers of all http responses that came from the bank
+    try:
+        frames_str = subprocess.check_output([tshark_exepath, '-r', tshark_capture_file, '-R', \
+        'http.response and ssl.app_data', '-T', 'fields', '-e', 'frame.number'])
+    except:
+        print 'Error starting tshark'
+        cleanup_and_exit()
+    frames_str = frames_str.rstrip()
+    frames = frames_str.split('\r\n')
+    
+    #second run of tshark is to dump all DATA in the responses (in decrypted form)
+    #so as to be able to match htmlhashes, and then record the numbers of the frames
+    #in which these occurred
+    #Wireshark display filter has no concept of "in" a list, so an ugly concantenated
+    #"or" appears to be necessary.
+    tshark_args_frames_stub = tshark_exepath + ' -r ' + tshark_capture_file + \
+    ' -R "frame.number==' + " or frame.number==".join(frames)
+    #for hex-ascii
+    tshark_args = tshark_args_frames_stub + '" -x'
+        
+    try:
+        ascii_dump = subprocess.check_output(tshark_args)
+    except:
+        print 'Error starting tshark'
+        cleanup_and_exit()
+    
+    #split the contents of ascii_dump into one block per frame:
+    i=1
+    lines = ascii_dump.split('\n')
+    for frame in frames:
+        frame_data[frame] = '' #need to instantiate the key/val pairs
+    
+    for frame in frames: 
+        while not (i >= len(lines) or lines[i].startswith('Frame')):
+            frame_data[frame] += lines[i] + '\n'
+            i=i+1
+        i=i+1
+
+    for htmlhash in htmlhashes:
+        if htmlhash == '':
+            print 'empty hash provided. Please investigate'
+            cleanup_and_exit()
+    
+            
+        found_frame = False
+        for frame in frames:            
+            # "-x" dumps ascii info of the SSL frame, de-fragmenting SSL segments,
+            # decrypting them, ungzipping (if necessary) and showing plain HTML
+            #algorithm: read ascii_dump until see "Frame" at beginning of line
+            #the chunk up to that point is output for frame 'frame'
+            #search for uncompressed entity body: if found, calc the html hash
+            #if it matches, store frame as one of the matched frames for the next
+            # step
+            md5hash = get_htmlhash_from_asciidump(frame_data[frame])
+            if htmlhash == md5hash:
+                found_frames.append(frame)
+                found_frame = True
+                print "found matching SSL segment in frame No " + frame
+                break
+        if not found_frame:
+            print("Couldn't find an SSL segment containing html hash provided")
+            cleanup_and_exit()
+            
+    #collect other possible SSL segments which are part of HTML pages
+    #to do this, we run tshark for a third time and collecting a list
+    #of frame numbers which contain relevant ssl segments, then we prune
+    #it to remove duplicates before the final tshark run. 
+    try:
+        segments_str = tshark('ssl.segment',tshark_capture_file, filter = '', \
+                              frames=found_frames)
+    except:
+        print 'Error starting tshark'
+        cleanup_and_exit()
+    segments_str = segments_str.rstrip()
+    segments = re.findall('\w+',segments_str) #entries separated by , \r \n
+    if len(segments) < 1:
+        print 'zero SSL segments, should be at least one. Please investigate'
+        cleanup_and_exit()
+    #there can be multiple SSL segments in the same frame, so remove duplicates
+    segments = set(segments)
+    
+    try:
+        ssl_app_data = tshark('ssl.app_data',tshark_capture_file,filter='', \
+                              frames = segments)
+    except:
+        print 'Error starting tshark'
+        cleanup_and_exit()
+
+    ssl_app_data_list = re.findall('\S+',ssl_app_data)
+    return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
+    
+
+def get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list):
+    ssl_hashes = []
+    for s in ssl_app_data_list:
+        #get rid of commas and colons
+        #(ssl.app_data comma-delimits multiple SSL segments within the same frame)
+        s = s.rstrip()
+        s = s.replace(',',' ')
+        s = s.replace(':',' ')
+        if s == ' ':
+            print 'empty frame hex. Please investigate'
+            cleanup_and_exit()
+        ssl_hashes.append(hashlib.md5(bytearray.fromhex(s)).hexdigest()) 
+        #print "NUmber of hashes is now: ", len(ssl_hashes)
+    #print ssl_hashes
+    return ssl_hashes
+
+#look at tshark's ascii dump to better understand the parsing taking place
+def get_htmlhash_from_asciidump(ascii_dump):
+    hexdigits = set('0123456789abcdefABCDEF')
+    assert ascii_dump != '', 'empty frame dump'
+    html_found = False
+    binary_html = bytearray()
+    for line in ascii_dump.split('\n'):
+        if 'Uncompressed entity body' in line:
+            html_found = True
+            continue
+        if not html_found:
+            continue
+        if html_found:
+            if line == '\n' or line == '':
+                continue
+            #convert ascii representation of hex into binary
+            elif all(c in hexdigits for c in line [:4]):
+                m_array = bytearray.fromhex(line[6:54])
+                binary_html += m_array
+            else:
+                break          
+    if html_found:
+        assert len(binary_html) != 0, 'empty binary array'
+        return hashlib.md5(binary_html).hexdigest()
+    else:
+        print 'Could not find Uncompressed entity body in the frame'
+
+#helper fn for debug/testing
+def write_hashes_to_file(hashes):
+    print "Writing hashes"
+    hashes_string = ""
+    for hash in hashes:
+        hashes_string += hash+';'
+        installdir = os.path.dirname(os.path.realpath(__file__))
+        with open (os.path.join(installdir,'output'),"w") as file:
+                file.write(hashes_string)
+
+#helper fn for debug/testing
+def read_hashes_from_file():
+    line = open('output', 'r').read()
+    hashes = line.rstrip(';').split(';')
+    return hashes
 
 #start processes and return their PIDs for later SIGTERMing
 def buyer_start_bitcoind_stunnel_sshpass_dumpcap():
@@ -518,136 +805,35 @@ def start_firefox():
     except:
         print "Error starting Firefox"
         cleanup_and_exit()
-    
 
-#the tempdir contains html files as well as folders with js,png,css. Ignore the folders
-def buyer_get_htmlhashes():
-    print "Getting hashes of saved html files"
-    onlyfiles = [f for f in os.listdir(htmldir) if os.path.isfile(os.path.join(htmldir,f))]
-    htmlhashes = []
-    for file in onlyfiles:
-        htmlhashes.append(hashlib.md5(open(file, 'r').read()).hexdigest())
-    return htmlhashes
+#this is just a hex digest of the html
+def get_htmlhash_from_html(h):
+        return hashlib.md5(h).hexdigest()
 
-#Find the frame which contains the html hash and return the frame's SSL part hash
-def buyer_get_sslhashes(htmlhashes):
-    print "Finding SSL segments corresponding to the saved html files"
-    sslhashes = []
-    for htmlhash in htmlhashes:
-        if htmlhashes != '':
-            print 'empty hash provided. Please investigate'
-            cleanup_and_exit()
-        #get frame numbers of all http responses that came from the bank
-        try:
-            frames_str = subprocess.check_output([tshark_exepath, '-r', tshark_capture_file, '-R', 'http.response', '-T', 'fields', '-e', 'frame.number'])
-        except:
-            print 'Error starting tshark'
-            cleanup_and_exit()
-        frames_str = frames_str.rstrip()
-        frames = frames_str.split('\n')
-        found_frame = 0
-        for frame in frames:
-            # "-x" dumps ascii info of the SSL frame, de-fragmenting SSL segments, decrypting them, ungzipping (if necessary) and showing plain HTML
-            try:
-                ascii_dump = subprocess.check_output([tshark_exepath, '-r', tshark_capture_file, '-R', 'frame.number==' + frame, '-x'])
-            except:
-                print 'Error starting tshark'
-                cleanup_and_exit()
-            md5hash = get_htmlhash_from_asciidump(ascii_dump)
-            if htmlhash == md5hash:
-                found_frame = frame
-                print "found matching SSL segment in frame No " + frame
-                break
-        if not found_frame:
-            print("Couldn't find an SSL segment containing html hash provided")
-            cleanup_and_exit()
-            
-        #collect other possible SSL segments which are part of HTML page 
-        try:
-            segments_str =  subprocess.check_output([tshark_exepath, '-r', tshark_capture_file, '-R', 'frame.number==' + found_frame, '-T', 'fields', '-e', 'ssl.segment'])
-        except:
-            print 'Error starting tshark'
-            cleanup_and_exit()
-        segments_str = segments_str.rstrip()
-        segments = segments_str.split(',')
-        if len(segments) > 1:
-            print 'zero SSL segments, should be at least one. Please investigate'
-            cleanup_and_exit()
-        #there can be multiple SSL segments in the same frame, so remove duplicates
-        segments = set(segments)
-        
-        for segment in segments:
-            try:
-                frame_ssl_hex = subprocess.check_output([tshark_exepath, '-r', tshark_capture_file, '-R', 'frame.number==' + segment, '-T', 'fields', '-e', 'ssl.app_data'])
-            except:
-                print 'Error starting tshark'
-                cleanup_and_exit()
-            frame_ssl_hex = frame_ssl_hex.rstrip()
-            #get rid of commas and colons
-            #(ssl.app_data comma-delimits multiple SSL segments within the same frame)
-            frame_ssl_hex = frame_ssl_hex.replace(',',' ')
-            frame_ssl_hex = frame_ssl_hex.replace(':',' ')
-            if frame_ssl_hex != ' ':
-                print 'empty frame hex. Please investigate'
-                cleanup_and_exit()
-            sslhashes.append(hashlib.md5(bytearray.fromhex(frame_ssl_hex)).hexdigest())
-    return sslhashes
-
-#look at tshark's ascii dump to better understand the parsing taking place
-def get_htmlhash_from_asciidump(ascii_dump):
-    hexdigits = set('0123456789abcdefABCDEF')
-    assert asci_dump != '', 'empty frame dump'
-    html_found = False
-    binary_html = bytearray()
-    for line in asci_dump.split('\n'):
-        if 'Uncompressed entity body' in line:
-            html_found = True
-            continue
-        if not html_found:
-            continue
-        if html_found:
-            if line == '\n' or line == '':
-                continue
-            #convert ascii representation of hex into binary
-            elif all(c in hexdigits for c in line [:4]):
-                m_array = bytearray.fromhex(line[6:54])
-                binary_html += m_array
-            else:
-                break          
-    if html_found:
-        assert len(binary_html) != 0, 'empty binary array'
-        return hashlib.md5(binary_html).hexdigest()
-    else:
-        raise Exception('Could not find Uncompressed entity body in the frame')
-    
-def cleanup_and_exit():
-    global pids
-    for pid in [item[1] for item in pids.items()]:
-        os.kill(pid, signal.SIGTERM)
-    os._exit(1) # <--- a hackish way to kill process from a thread
-    #os.kill(os.getpid(), signal.SIGINT) <-- didn't work
-    #sys.exit(1)
-    #sys.exit doesn't work if this function is invoked from a thread - only the thread stops, not the main process
-
-def sighandler(signal, frame):
-    cleanup_and_exit()
 
 pids = dict()
 ppid = 0
+    
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print 'Please provide one of the arguments: "buyer" or "seller"'
         exit()
     role = sys.argv[1]
-    if role != 'buyer' and role != 'seller':
+    
+    #f = open(os.devnull, 'w')
+    #sys.stdout = f
+    #sys.stderr = f
+    
+    if role != 'buyer' and role != 'tester' and role != 'seller':
         print 'Unknown argument. Please provide one of the arguments: "buyer" or "seller"'
         exit()
+    
     #making this process a leader of the process group
     print '----------------------------MY PID IS ', os.getpid(), '----------------------------'
     print 'Terminate me and my children with "kill -s SIGKILL -"'+str(os.getpid())+' --> (notice the minus) sends to all members of process group'
     signal.signal(signal.SIGTERM, sighandler)
     
-    if role=='buyer':
+       if role=='buyer':
         #global pids
         buyer_start_bitcoind_stunnel_sshpass_dumpcap()
         buyer_get_and_verify_seller_cert()
@@ -678,6 +864,7 @@ if __name__ == "__main__":
         pids.pop('sshpass')
         pids.pop('stunnel')
         
+        
     elif role == 'seller':
         #global pids
         seller_start_bitcoind_stunnel_sshpass_dumpcap_squid()
@@ -693,16 +880,7 @@ if __name__ == "__main__":
             pids.pop(pid[0])
         hashes = [hash for hash in thread.retval.split(';') if len(hash)>0]
         send_logs_to_escrow(hashes)
-    
-#OS = ''
-#if !sys.platform.find('linux'):
-    #OS = 'linux'
-#else:
-    #OS = 'unknown'
-
         
-#if OS == 'linux':
-    #proc = subprocess.Popen(["which", "firefox"], stdout=subprocess.PIPE)
-    #firefox_exepath = proc.stdout.read().rstrip()
-    #if firefox_exepath == "":
-        #raise Exception ("Could not find Firefox")
+       
+
+                             
