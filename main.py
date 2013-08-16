@@ -10,46 +10,23 @@ import time
 import signal
 import re
 from bitcoinrpc import authproxy
-
-#--------------------Begin customizable variables-------------------------------------
-
-#THIS MUST BE CHANGED to point to a escrow's server IP which is running sshd. You can use localhost for testing
-escrow_host = 'localhost' #e.g. '1.2.3.4'  NB! '127.0.0.1' may not work, use localhost instead
-#the port is an arbtrary port on the escrow's server. Unless there is a port conflict, no need to change it.
-escrow_port = 12345
-#an existing username and password used to connect to sshd on escrow's server. For testing you can give your username if sshd ir run locally
-escrow_ssh_user = 'default' #e.g. 'ssllog_user' 
-escrow_ssh_pass = 'VqQ7ccyKcZCRq'
-#THIS ADDRESS MUST BE in the seller's bitcond wallet
-seller_addr_funded_multisig = '19e49upbF9JN7PqkTWpbaj3ijVJmb96rTJ' #e.g. '19CzQYZGiaENfypuNzMAf3Mg4vs5oE1hgV'
-
+    
+#--------------------Begin initialization-------------------------------------
 #ssllog_installdir is the dir from which main.py is run
 installdir = os.path.dirname(os.path.realpath(__file__))
 
-#---------------------You can modify these paths if some programs are not in your $PATH------------------
-#DONT USE the version of stunnel that comes with Ubuntu - it is a ridiculously old incompatible version
-stunnel_exepath = '/home/default/Desktop/sslxchange/stunnel-4.56/src/stunnel'
-ssh_exepath = '/usr/bin/ssh'
-sshpass_exepath = '/usr/bin/sshpass'
-squid3_exepath = '/usr/sbin/squid3'
-firefox_exepath = '/home/default/Desktop/firefox20/firefox'
-#BITCOIND IS USUALLY NOT IN YOUR PATH
-bitcoind_exepath = '/home/default/Desktop/bitcoin-qt/bitcoin-0.8.2-linux/bin/64/bitcoind'
-tshark_exepath = '/usr/bin/tshark'
-#editcap,dumpcap come together with wireshark package
-editcap_exepath = '/usr/bin/editcap'
-# NB!! dumpcap has to be given certain capabilities on Linux
-# run --> sudo setcap 'CAP_NET_RAW+eip CAP_NET_ADMIN+eip' /usr/bin/dumpcap
-dumpcap_exepath = '/usr/bin/dumpcap'
-
-#Overwrites for windows testing
-#This needs to be in a config file! 
-tshark_exepath="C:/Program Files/Wireshark/tshark.exe"
-dumpcap_exepath="C:/Program Files/Wireshark/dumpcap.exe"
-editcap_exepath="C:/Program Files/Wireshark/editcap.exe"
-tshark_capture_file="dumpout2.pcap"
-buyer_dumpcap_capture_file = "dumpout2.pcap"
-seller_dumpcap_capture_file = "dumpfromseller.pcap"
+stunnel_exepath = ""
+ssh_exepath = ""
+sshpass_exepath = ""
+squid3_exepath = ""
+firefox_exepath = ""
+bitcoind_exepath = ""
+tshark_exepath = ""
+editcap_exepath = ""
+dumpcap_exepath = ""
+tshark_capture_file=""
+buyer_dumpcap_capture_file = ""
+seller_dumpcap_capture_file = ""
 
 #where buyer's dumpcap puts its traffic capture file
 buyer_dumpcap_capture_file= os.path.join(installdir, 'capture', 'buyer_dumpcap.pcap')
@@ -63,7 +40,7 @@ htmldir = os.path.join(installdir,'htmldir')
 buyer_bitcoin_rpc = authproxy.AuthServiceProxy("http://ssllog_user:ssllog_pswd@127.0.0.1:8338")
 seller_bitcoin_rpc = authproxy.AuthServiceProxy("http://ssllog_user:ssllog_pswd@127.0.0.1:8339")
 
-#--------------End of customizable variables------------------------------------------------
+#--------------End of initialization------------------------------------------------
 
 #handle only paths we are interested and let python handle the response headers
 #class "object" in needed to access super()
@@ -820,11 +797,40 @@ if __name__ == "__main__":
         exit()
     role = sys.argv[1]
     
-    #f = open(os.devnull, 'w')
-    #sys.stdout = f
-    #sys.stderr = f
+    #Load all necessary configurations:
+    #========================
+    Config = ConfigParser.ConfigParser()
+    Config.read("ssllog.ini")
+    print Config.sections() #for testing
+        
+    #load paths of executables
+    tshark_exepath = Config.get("Exepaths","tshark_exepath")
+    editcap_exepath = Config.get("Exepaths", "editcap_exepath")
+    dumpcap_exepath = Config.get("Exepaths","dumpcap_exepath")
+    stunnel_exepath = Config.get("Exepaths","stunnel_exepath")
+    ssh_exepath = Config.get("Exepaths","ssh_exepath")
+    bitcoind_exepath = Config.get("Exepaths","bitcoind_exepath") 
+    squid3_exepath = Config.get("Exepaths","squid3_exepath")
+    firefox_exepath = Config.get("Exepaths","firefox_exepath")
+       
+    #load paths of necessary capture files
+    #At present these are overwriting defaults, we could
+    #remove this probably
+    buyer_dumpcap_capture_file = Config.get("Captures","buyer_dumpcap_capture_file")
+    seller_dumpcap_capture_file = Config.get("Captures","seller_dumpcap_capture_file")
+    tshark_capture_file = Config.get("Captures","tshark_capture_file")
     
-    if role != 'buyer' and role != 'tester' and role != 'seller':
+    #Load details of escrow configuration
+    escrow_host = Config.get("Escrow","escrow_host")
+    escrow_port = Config.get("Escrow","escrow_port")
+    escrow_sshuser = Config.get("Escrow","escrow_ssh_user")
+    escrow_sshpass = Config.get("Escrow","escrow_ssh_pass")
+    
+    #Bitcoin specific config
+    seller_addr_funded_multisig = Config.get("Escrow","seller_addr_funded_multisig")
+    #=============================
+    
+    if role != 'buyer' and role != 'seller':
         print 'Unknown argument. Please provide one of the arguments: "buyer" or "seller"'
         exit()
     
