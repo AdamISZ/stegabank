@@ -35,6 +35,34 @@ def tshark(infile, field='', filter='', frames=[]):
         return -1
     return tshark_out   
 
+
+#AG wrapper for running editcap; -r is used
+#to include rather than remove frames, filter
+#is used to generate a list of frame numbers to include
+def editcap(infile, outfile, reverse = True, filter='', frames=[]):
+    editcap_exepath =  shared.config.get("Exepaths","editcap_exepath")
+    frame_list=''
+    if (reverse):
+        args_stub = editcap_exepath + ' -r ' + infile 
+        print "Args stub is: " + args_stub
+    else:
+        args_stub = editcap_exepath + ' ' + infile
+    
+    if (frames):
+        print "not yet implemented: list of frames passed to editcap"
+        exit()
+    else:
+        tshark_out = tshark(infile,field = 'frame.number',filter = filter)
+        frame_list = tshark_out.split('\r\n')
+    
+    print "FRames are: ", frame_list    
+    args = args_stub +' ' + outfile + ' ' + ' '.join(frame_list)
+    print "The full argument call is: " + args
+    retcode = subprocess.check_output(args)
+    print "editcap output was: " + retcode
+    
+    
+    
 def get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list):
     
     ssl_hashes = []
@@ -62,7 +90,7 @@ def verify_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
     frames_wanted = []
     frames_hashes = {}
     #Run tshark once to get a list of frames with ssl app data in them
-    filterstr = 'ssl.reassembled.data'
+    filterstr = 'ssl.record.content_type == 23'
     if (port > 0):
         filterstr = filterstr + ' and tcp.port=='+str(port)
     try:
@@ -78,6 +106,7 @@ def verify_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
     #the frame numbers are keys for the dictionary
     #so we initialise them:
     for frame in ssl_frames:
+        #print frame
         frames_hashes[frame] = ''
 
     #Run tshark a third time to store all the app data
@@ -95,7 +124,7 @@ def verify_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
         + ' -r ' + capfile + ' -Y "frame.number ==' + \
         frame_filter_string
         
-    tshark_args = tshark_args_seller_stub + '" -T fields -e ssl.reassembled.data'
+    tshark_args = tshark_args_seller_stub + '" -T fields -e ssl.app_data'
     
     try:
         ssl_app_data = subprocess.check_output(tshark_args)
@@ -103,7 +132,15 @@ def verify_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
         print 'Exception in tshark'
         return -1
     
-    ssl_app_data_list = ssl_app_data.split('\n')
+    #ssl.segment.data will return all encrypted segments separated by commas
+    #but also, lists of segments from different frames will be separated by
+    #newlines
+    ssl_app_data_list = ssl_app_data.replace(',','\n').split('\n')
+    ssl_app_data_list = set(ssl_app_data_list)
+    
+    #for debug:
+    print "Length of list of ssl segments for file " + capfile + " was: " +str(len(ssl_app_data_list))
+    
     return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
     
     
@@ -112,7 +149,7 @@ def verify_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
 #return true if and only if ALL ssl segments are found
 #(seems a bit harsh/brittle eh?)
 def check_ssl_hashes_are_all_in_capfile(escrow_hashes, scf):
-    seller_hashes = verify_ssl_hashes_from_capfile(scf)
+    seller_hashes = verify_ssl_hashes_from_capfile(scf,port=3128)
     #open question: is it ok to require perfect equality here?
     #current opinion: no, should only request subset
     if set(escrow_hashes).issubset(set(seller_hashes)): 
@@ -143,7 +180,7 @@ def get_all_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
     frames_wanted = []
     segments_hashes = {}
     #Run tshark once to get a list of frames with ssl app data in them
-    filterstr = 'ssl.reassembled.data'
+    filterstr = 'ssl'
     if (port > 0):
         filterstr = filterstr + ' and tcp.port=='+str(port)
     try:
