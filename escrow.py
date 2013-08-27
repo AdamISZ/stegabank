@@ -36,9 +36,22 @@ import helper_startup
 #=====END LIBRARY IMPORTS==========
 
 
-def test_ssl_matching(buyer_file,seller_file):
+def test_ssl_matching(file1,file2,role_string):
     
-    #preparatory step: filter and reduce buyer and seller files
+    if (role_string == 'bs'):
+        port1 = int(shared.config.get("Buyer","buyer_proxy_port"))
+        port2 = int(shared.config.get("Seller","seller_proxy_port"))
+    elif (role_string == 'es'):
+        port1 = int(shared.config.get("Escrow","escrow_port"))
+        port2 = int(shared.config.get("Seller","seller_proxy_port"))
+    elif (role_string == 'be'):
+        port1 = int(shared.config.get("Buyer","buyer_proxy_port"))
+        port2 = int(shared.config.get("Escrow","escrow_port"))
+    else:
+        print "error, incorrect role string passed to test_ssl_matching()"
+        exit()
+        
+    #preparatory step: filter and reduce files
     #to contain only SSL data and only data for the right port:
     #EDITED: realised this has already been done in live capture
     #buyer_file_filtered = \
@@ -46,20 +59,34 @@ def test_ssl_matching(buyer_file,seller_file):
     #seller_file_filtered = \
     #    sharkutils.filter_cap_file(seller_file, buyer_proxy_port, ssl = True)
     #
-    print "We're about to call get hashes from capfile with file name: " + buyer_file
-    buyer_hashes = sharkutils.verify_ssl_hashes_from_capfile(buyer_file, \
-                    port = int(shared.config.get("Buyer","buyer_proxy_port")))
-    result = sharkutils.check_ssl_hashes_are_all_in_capfile(buyer_hashes,seller_file)
+    print "We're about to call get hashes from capfile with file name: " + file1
+    hashes1 = sharkutils.verify_ssl_hashes_from_capfile(file1, port=port1)
+    print "We're about to call get hashes from capfile with file name: " + file2
+    hashes2 = sharkutils.verify_ssl_hashes_from_capfile(file2, port=port2)
     
-    if result:
-        print "The seller's capture file matches the escrow's capture file; \
-               \n The buyer's ssl keys must be faulty."
-        exit()
+   
+    if (role_string == 'es'):
+        if (set(hashes2).issubset(set(hashes1))):
+            print "The seller's capture file matches the escrow's capture file; \
+                   \n The buyer's ssl keys must be faulty."
+            exit()
+        else:
+            print "The ssl traffic in the seller's capture file does not match \
+                   \n that in the escrow capture file. The seller has not \
+                       \n provided a genuine capture file."
+            exit()
     else:
-        print "The ssl traffic in the capture file delivered by the seller \n \
+        if set(hashes1) ==set(hashes2): 
+            print "The seller's capture file matches the buyer's capture file; \
+                \n The buyer's ssl keys must be faulty."
+        
+        else:
+            print "The ssl traffic in the capture file delivered by the seller \n \
                does not match that in the escrow capture file. The seller \n \
                has not provided a genuine capture file. "
-        exit()
+        
+        
+        
 
 if __name__ == "__main__":
             
@@ -74,7 +101,7 @@ if __name__ == "__main__":
 
     #testing core functionality TODO remove from prod
     if int(level) == 99:
-        test_ssl_matching(sys.argv[2],sys.argv[3])
+        test_ssl_matching(sys.argv[2],sys.argv[3], sys.argv[4])
         exit()
         
     if int(level) == 1:

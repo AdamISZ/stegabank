@@ -20,11 +20,11 @@ if __name__ == "__main__":
     #========================
     helper_startup.loadconfig()
     
-    if len(sys.argv) < 2:
-        print 'Usage cleancap.py <capfile> <filter string>'
+    if len(sys.argv) < 3:
+        print 'Usage cleancap.py <capfile> <filter string> <reverse>'
         exit()
     outfile = sys.argv[1] + "_clean"
-    sharkutils.editcap(sys.argv[1],outfile,filter=sys.argv[2], reverse = False)
+    sharkutils.editcap(sys.argv[1],outfile,filter=sys.argv[2], reverse=int(sys.argv[3]))
     
     
 

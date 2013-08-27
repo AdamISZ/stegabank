@@ -1,9 +1,12 @@
 import re
+import os
+import platform
 import ConfigParser
 import shared
 import subprocess
 import hashlib
 
+OS = platform.system()
 #AG wrapper for running tshark to extract data
 #using the syntax -T fields
 #output is filtered by a list of frame numbers
@@ -11,22 +14,20 @@ import hashlib
 def tshark(infile, field='', filter='', frames=[]):
     tshark_exepath =  shared.config.get("Exepaths","tshark_exepath")
     
-    args_stub = tshark_exepath + ' -r ' + infile 
+    args = [tshark_exepath,'-r',infile] 
     
     if (not frames and not field):
-        args = args_stub + " " + filter
-    elif (not filter and not frames):
-        args = args_stub
+        args.append(filter)
+    #elif (not filter and not frames):
+    #    args = [args_stub]
     elif (not filter):
-        args = args_stub + ' -Y "frame.number ==' + \
-        " or frame.number==".join(frames)
+        args.extend(['-Y', '"frame.number ==', ' or frame.number=='.join(frames),'"'])
     elif (not frames):
-        args = args_stub + ' -Y "' + filter
+        args.extend(['-Y',filter])
     else:
-        args = args_stub + ' -Y "frame.number ==' + \
-        " or frame.number==".join(frames) + ' and ' + filter
+        args.extend(['-Y', '"frame.number ==',' or frame.number=='.join(frames),' and ',filter,'"'])
     if field:
-        args = args + '" -T fields -e ' + field
+        args.extend(['-T','fields', '-e',field])
     print args
     try:
         tshark_out =  subprocess.check_output(args)
@@ -42,24 +43,31 @@ def tshark(infile, field='', filter='', frames=[]):
 def editcap(infile, outfile, reverse = True, filter='', frames=[]):
     editcap_exepath =  shared.config.get("Exepaths","editcap_exepath")
     frame_list=''
-    if (reverse):
-        args_stub = editcap_exepath + ' -r ' + infile 
-        print "Args stub is: " + args_stub
+    args = [editcap_exepath]
+    if (reverse != 0):
+        args.extend(['-r',infile]) 
     else:
-        args_stub = editcap_exepath + ' ' + infile
+        args.append(infile)
     
     if (frames):
         print "not yet implemented: list of frames passed to editcap"
         exit()
     else:
         tshark_out = tshark(infile,field = 'frame.number',filter = filter)
-        frame_list = tshark_out.split('\r\n')
+        if (OS == "Linux"):
+            frame_list = tshark_out.split('\n')
+        elif (OS == "Windows"):
+            frame_list = tshark_out.split('\r\n')
+        else:
+            print "OS not recognized"
+            exit()
     
-    print "FRames are: ", frame_list    
-    args = args_stub +' ' + outfile + ' ' + ' '.join(frame_list)
-    print "The full argument call is: " + args
+    print "Frames are: ", frame_list 
+    args.append(outfile)   
+    args.extend(frame_list)
+    
     retcode = subprocess.check_output(args)
-    print "editcap output was: " + retcode
+    
     
     
     
@@ -142,20 +150,7 @@ def verify_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
     print "Length of list of ssl segments for file " + capfile + " was: " +str(len(ssl_app_data_list))
     
     return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
-    
-    
-#L2D resolution key functionality:
-#match up the ssl segments already found in one capture file with another
-#return true if and only if ALL ssl segments are found
-#(seems a bit harsh/brittle eh?)
-def check_ssl_hashes_are_all_in_capfile(escrow_hashes, scf):
-    seller_hashes = verify_ssl_hashes_from_capfile(scf,port=3128)
-    #open question: is it ok to require perfect equality here?
-    #current opinion: no, should only request subset
-    if set(escrow_hashes).issubset(set(seller_hashes)): 
-        return True
-    else:
-        return False
+
 
 def filter_cap_file(file, port,ssl=False):
     
@@ -163,11 +158,6 @@ def filter_cap_file(file, port,ssl=False):
     if ssl:
         filter_string = "tcp.port==" + str(port) + " and ssl"
     
-
-
-
-
-
 
 
 #This function is intended to get hashes of ALL ssl data
