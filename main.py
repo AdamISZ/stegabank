@@ -9,39 +9,9 @@ import threading
 import time
 import signal
 import re
+import helper_startup
 from bitcoinrpc import authproxy
     
-#--------------------Begin initialization-------------------------------------
-#ssllog_installdir is the dir from which main.py is run
-installdir = os.path.dirname(os.path.realpath(__file__))
-
-stunnel_exepath = ""
-ssh_exepath = ""
-sshpass_exepath = ""
-squid3_exepath = ""
-firefox_exepath = ""
-bitcoind_exepath = ""
-tshark_exepath = ""
-editcap_exepath = ""
-dumpcap_exepath = ""
-tshark_capture_file=""
-buyer_dumpcap_capture_file = ""
-seller_dumpcap_capture_file = ""
-
-#where buyer's dumpcap puts its traffic capture file
-buyer_dumpcap_capture_file= os.path.join(installdir, 'capture', 'buyer_dumpcap.pcap')
-#where seller's dumpcap puts its traffic capture file
-seller_dumpcap_capture_file= os.path.join(installdir, 'capture', 'seller_dumpcap.pcap')
-#where Firefox saves html files when user marks them
-htmldir = os.path.join(installdir,'htmldir')
-
-#bitcond user/pass are already in bitcon.conf that comes with this installation
-#these bitcond handlers can be initialized even before bitcoind starts
-buyer_bitcoin_rpc = authproxy.AuthServiceProxy("http://ssllog_user:ssllog_pswd@127.0.0.1:8338")
-seller_bitcoin_rpc = authproxy.AuthServiceProxy("http://ssllog_user:ssllog_pswd@127.0.0.1:8339")
-
-#--------------End of initialization------------------------------------------------
-
 #handle only paths we are interested and let python handle the response headers
 #class "object" in needed to access super()
 class buyer_HandlerClass(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
@@ -131,33 +101,6 @@ def cleanup_and_exit():
         os.kill(pid, signal.SIGTERM)
     os._exit(1) # <--- a hackish way to kill process from a thread
 
-#AG wrapper for running tshark to extract data
-#using the syntax -T fields
-#output is filtered by a list of frame numbers
-#and/or any other filter in Wireshark's -R syntax
-def tshark(field, infile,filter='', frames=[]):
-    #exepath is hard coded global (or config file eventually)
-    args_stub = tshark_exepath + ' -r ' + infile 
-    if (not filter and not frames):
-        args = args_stub
-    elif (not filter):
-        args = args_stub + ' -R "frame.number ==' + \
-        " or frame.number==".join(frames)
-    elif (not frames):
-        args = args_stub + ' -R "' + filter
-    else:
-        args = args_stub + ' -R "frame.number ==' + \
-        " or frame.number==".join(frames) + ' and ' + filter
-    
-    args = args + '" -T fields -e ' + field
-    
-    try:
-        tshark_out =  subprocess.check_output(args)
-    except:
-        print 'Error starting tshark'
-        cleanup_and_exit()
-    return tshark_out   
-
 #send all the hashes in an HTTP HEAD request    
 def buyer_send_sslhashes(sslhashes):
     print "Sending hashes of SSL segments to the seller"
@@ -202,14 +145,14 @@ def buyer_start_stunnel_with_certificate():
         
 #AG optimized 4 Aug
 def send_logs_to_escrow(sslhashes):
-    print "Findind SSL segments in captured traffic"
+    print "Finding SSL segments in captured traffic"
     assert len(sslhashes) > 0, 'zero hashes provided'
     frames_wanted = []
     segments_hashes = {}
     
     #Run tshark once to get a list of frames with ssl app data in them
     try:
-        frames_str = tshark('frame.number', seller_dumpcap_capture_file, \
+        frames_str = tshark(seller_dumpcap_capture_file,'frame.number',  \
                             'ssl.app_data')
     except:
         print 'Exception in tshark'
@@ -221,9 +164,8 @@ def send_logs_to_escrow(sslhashes):
     #Run tshark a second time to get the ssl.segment frames
     #from the full list of frames that matched content type 23
     try:
-        segments_str = tshark('ssl.segment',seller_dumpcap_capture_file, \
+        segments_str = tshark(seller_dumpcap_capture_file,'ssl.segment', \
                               filter='',frames=ssl_frames)
-        #segments_str =  subprocess.check_output(tshark_args)
     except:
         print 'Error starting tshark'
         cleanup_and_exit()
@@ -236,7 +178,7 @@ def send_logs_to_escrow(sslhashes):
         cleanup_and_exit()
     #there can be multiple SSL segments in the same frame, so remove duplicates
     segments = set(segments)
-    print "Need to process this many segments: ", len(segments)
+    print "Need to process this many frames: ", len(segments)
     
     #the frame numbers are keys for the dictionary
     #so we initialise them:
@@ -291,7 +233,7 @@ def send_logs_to_escrow(sslhashes):
         param = 'ssl.record.content_type == 23 and frame.number <=' + highest_frame
         
         try:
-            frames_to_purge_str = tshark('frame.number',seller_dumpcap_capture_file, \
+            frames_to_purge_str = tshark(seller_dumpcap_capture_file,'frame.number', \
                                          param)
         except:
             print 'Exception in tshark'
@@ -365,7 +307,12 @@ def seller_start_bitcoind_stunnel_sshpass_dumpcap_squid():
     print "Starting bitcoind in offline mode. No part of blockchain will be downloaded"
     try:
        #start bitcoind in offline mode
-       bitcoind_proc = subprocess.Popen([bitcoind_exepath, '-datadir=' + os.path.join(installdir, "empty_bitcoin_datadir_seller"), '-maxconnections=0', '-server', '-listen=0', '-rpcuser=ssllog_user', '-rpcpassword=ssllog_pswd', '-rpcport=8339'], stdout=open(os.devnull,'w'), stderr=open(os.devnull,'w'))
+       bitcoind_proc = subprocess.Popen([bitcoind_exepath, '-datadir=' + \
+                    os.path.join(installdir, "empty_bitcoin_datadir_seller"), \
+                    '-maxconnections=0', '-server', '-listen=0', \
+                    '-rpcuser=ssllog_user', '-rpcpassword=ssllog_pswd', \
+                    '-rpcport=8339'], stdout=open(os.devnull,'w'), \
+                    stderr=open(os.devnull,'w'))
     except:
         print 'Exception starting bitcoind'
         cleanup_and_exit()
@@ -373,7 +320,10 @@ def seller_start_bitcoind_stunnel_sshpass_dumpcap_squid():
     
     print "Starting ssh connection to escrow's server"
     try:
-        sshpass_proc = subprocess.Popen([sshpass_exepath, '-p', escrow_ssh_pass, ssh_exepath, escrow_ssh_user+'@'+escrow_host, '-R', str(escrow_port)+':localhost:33310'], stdout=open(os.devnull,'w'), stderr=open(os.devnull,'w'))
+        sshpass_proc = subprocess.Popen([sshpass_exepath, '-p', escrow_ssh_pass, \
+                       ssh_exepath, escrow_ssh_user+'@'+escrow_host, '-R', \
+                        str(escrow_port)+':localhost:33310'], \
+                        stdout=open(os.devnull,'w'), stderr=open(os.devnull,'w'))
     except:
         print 'Exception connecting to sshd'
         cleanup_and_exit()
@@ -383,7 +333,9 @@ def seller_start_bitcoind_stunnel_sshpass_dumpcap_squid():
     #stunnel finds paths in .conf relative to working dir
     os.chdir(os.path.join(installdir,'stunnel'))
     try:
-        stunnel_proc = subprocess.Popen([stunnel_exepath, os.path.join(installdir, 'stunnel', 'seller.conf')], stdout=open(os.devnull,'w'), stderr=open(os.devnull,'w'))
+        stunnel_proc = subprocess.Popen([stunnel_exepath, \
+                    os.path.join(installdir, 'stunnel', 'seller.conf')], \
+                    stdout=open(os.devnull,'w'), stderr=open(os.devnull,'w'))
     except:
         print 'Exception starting stunnel'
         cleanup_and_exit()
@@ -391,7 +343,8 @@ def seller_start_bitcoind_stunnel_sshpass_dumpcap_squid():
     
     print "Starting squid3"
     try:
-        squid3_proc = subprocess.Popen([squid3_exepath], stdout=open(os.devnull,'w'), stderr=open(os.devnull,'w'))
+        squid3_proc = subprocess.Popen([squid3_exepath], \
+                    stdout=open(os.devnull,'w'), stderr=open(os.devnull,'w'))
     except:
         print 'Exception starting squid'
         cleanup_and_exit()
@@ -401,7 +354,9 @@ def seller_start_bitcoind_stunnel_sshpass_dumpcap_squid():
     try:
         #todo: don't assume that 'lo' is the loopback, query it
         #listen in-between stunnel and squid, filter out all the rest of loopback traffic
-        dumpcap_proc = subprocess.Popen([dumpcap_exepath, '-i', 'lo', '-f', 'tcp port 33310', '-w', seller_dumpcap_capture_file ], stdout=open(os.devnull,'w'), stderr=open(os.devnull,'w'))
+        dumpcap_proc = subprocess.Popen([dumpcap_exepath, '-i', 'lo', '-f', \
+                        'tcp port 33310', '-w', seller_dumpcap_capture_file ], \
+                        stdout=open(os.devnull,'w'), stderr=open(os.devnull,'w'))
     except:
         print 'Exception dumpcap tshark'
         cleanup_and_exit()
@@ -542,7 +497,7 @@ def buyer_get_sslhashes(htmlhashes):
     #of frame numbers which contain relevant ssl segments, then we prune
     #it to remove duplicates before the final tshark run. 
     try:
-        segments_str = tshark('ssl.segment',tshark_capture_file, filter = '', \
+        segments_str = tshark(tshark_capture_file,'ssl.segment',filter = '', \
                               frames=found_frames)
     except:
         print 'Error starting tshark'
@@ -556,7 +511,7 @@ def buyer_get_sslhashes(htmlhashes):
     segments = set(segments)
     
     try:
-        ssl_app_data = tshark('ssl.app_data',tshark_capture_file,filter='', \
+        ssl_app_data = tshark(tshark_capture_file,filter='','ssl.app_data', \
                               frames = segments)
     except:
         print 'Error starting tshark'
@@ -632,7 +587,11 @@ def buyer_start_bitcoind_stunnel_sshpass_dumpcap():
     print 'Starting bitcoind'
     try:
         #start bitcoind in offline mode
-        bitcoind_proc = subprocess.Popen([bitcoind_exepath, '-datadir=' + os.path.join(installdir, "empty_bitcoin_datadir_buyer"), '-maxconnections=0', '-server', '-listen=0', '-rpcuser=ssllog_user', '-rpcpassword=ssllog_pswd', '-rpcport=8338'])
+        bitcoind_proc = subprocess.Popen([bitcoind_exepath, '-datadir=' + \
+                        os.path.join(installdir, "empty_bitcoin_datadir_buyer"), \
+                        '-maxconnections=0', '-server', '-listen=0', \
+                        '-rpcuser=ssllog_user', '-rpcpassword=ssllog_pswd', \
+                        '-rpcport=8338'])
     except:
         print 'Exception starting bitcoind'
         cleanup_and_exit()
@@ -640,7 +599,10 @@ def buyer_start_bitcoind_stunnel_sshpass_dumpcap():
     
     print 'Starting ssh connection'
     try:
-        sshpass_proc = subprocess.Popen([sshpass_exepath, '-p', escrow_ssh_pass, ssh_exepath, escrow_ssh_user+'@'+escrow_host, '-L', '33309:localhost:'+str(escrow_port)], stdout=open(os.devnull,'w'))
+        sshpass_proc = subprocess.Popen([sshpass_exepath, '-p', escrow_ssh_pass, \
+                                ssh_exepath, escrow_ssh_user+'@'+escrow_host, \
+                                '-L', '33309:localhost:'+str(escrow_port)], \
+                                stdout=open(os.devnull,'w'))
     except:
         print 'Exception connecting to sshd'
         cleanup_and_exit()
@@ -651,12 +613,12 @@ def buyer_start_bitcoind_stunnel_sshpass_dumpcap():
 #after receiving the certificate, stunnel is terminated and restarted with the new certfcate
 #stunnel finds paths in .conf relative to working dir
     os.chdir(os.path.join(installdir,'stunnel'))
-    #try:
-        #stunnel_proc = subprocess.Popen([stunnel_exepath, os.path.join(installdir, 'stunnel', 'buyer_pre.conf')])
-    #except:
-        #print 'Exception starting stunnel'
-        #cleanup_and_exit()
-    #pids['stunnel'] = stunnel_proc.pid
+    try:
+        stunnel_proc = subprocess.Popen([stunnel_exepath, os.path.join(installdir, 'stunnel', 'buyer_pre.conf')])
+    except:
+        print 'Exception starting stunnel'
+        cleanup_and_exit()
+    pids['stunnel'] = stunnel_proc.pid
         
     print 'Making a test connection to example.org through the tunnel'
     #make a test request to see if stunnel setup is working
@@ -799,36 +761,7 @@ if __name__ == "__main__":
     
     #Load all necessary configurations:
     #========================
-    Config = ConfigParser.ConfigParser()
-    Config.read("ssllog.ini")
-    print Config.sections() #for testing
-        
-    #load paths of executables
-    tshark_exepath = Config.get("Exepaths","tshark_exepath")
-    editcap_exepath = Config.get("Exepaths", "editcap_exepath")
-    dumpcap_exepath = Config.get("Exepaths","dumpcap_exepath")
-    stunnel_exepath = Config.get("Exepaths","stunnel_exepath")
-    ssh_exepath = Config.get("Exepaths","ssh_exepath")
-    bitcoind_exepath = Config.get("Exepaths","bitcoind_exepath") 
-    squid3_exepath = Config.get("Exepaths","squid3_exepath")
-    firefox_exepath = Config.get("Exepaths","firefox_exepath")
-       
-    #load paths of necessary capture files
-    #At present these are overwriting defaults, we could
-    #remove this probably
-    buyer_dumpcap_capture_file = Config.get("Captures","buyer_dumpcap_capture_file")
-    seller_dumpcap_capture_file = Config.get("Captures","seller_dumpcap_capture_file")
-    tshark_capture_file = Config.get("Captures","tshark_capture_file")
-    
-    #Load details of escrow configuration
-    escrow_host = Config.get("Escrow","escrow_host")
-    escrow_port = Config.get("Escrow","escrow_port")
-    escrow_sshuser = Config.get("Escrow","escrow_ssh_user")
-    escrow_sshpass = Config.get("Escrow","escrow_ssh_pass")
-    
-    #Bitcoin specific config
-    seller_addr_funded_multisig = Config.get("Escrow","seller_addr_funded_multisig")
-    #=============================
+    helper_startup.loadConfig()
     
     if role != 'buyer' and role != 'seller':
         print 'Unknown argument. Please provide one of the arguments: "buyer" or "seller"'

@@ -24,7 +24,7 @@ if __name__ == "__main__":
         print 'Usage cleancap.py <capfile> <filter string> <reverse>'
         exit()
     outfile = sys.argv[1] + "_clean"
-    sharkutils.editcap(sys.argv[1],outfile,filter=sys.argv[2], reverse=int(sys.argv[3]))
+    sharkutils.editcap(sys.argv[1],outfile,filter=sys.argv[2], reverse_flag=int(sys.argv[3]))
     
     
 

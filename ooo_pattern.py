@@ -39,7 +39,7 @@ elif OS == 'Windows':
     capinfos_exe = 'C:\\Program Files\\Wireshark\\capinfos.exe'
     tshark_exe = 'C:\\Program Files\\Wireshark\\tshark.exe'
     editcap_exe = 'C:\\Program Files\\Wireshark\\editcap.exe'
-    mergecap_exe = 'C:\\Program Files\\Wireshark\\mergecap.exe'
+    mergecap_exe = 'C:\\Program Files\\Wireshark\\mergecap.exe' 
 
 #Try to rearrange but don't actually split and merge the pcap file
 #for the purposes of testing, starting_index allows to skip the given number of ooo frames
@@ -224,6 +224,7 @@ if __name__ == "__main__":
     global new_capture_file
     global capture_file
     global workdir
+    
     if ('help' in sys.argv) or (len(sys.argv) < 2):
         print 'Accepted arguments:'
         print 'capturefile.pcapng : the wireshark capture file to be analyzed'

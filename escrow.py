@@ -53,18 +53,14 @@ def test_ssl_matching(file1,file2,role_string):
         
     #preparatory step: filter and reduce files
     #to contain only SSL data and only data for the right port:
-    #EDITED: realised this has already been done in live capture
-    #buyer_file_filtered = \
-     #   sharkutils.filter_cap_file(buyer_file, buyer_proxy_port, ssl = True)
-    #seller_file_filtered = \
-    #    sharkutils.filter_cap_file(seller_file, buyer_proxy_port, ssl = True)
-    #
+    
     print "We're about to call get hashes from capfile with file name: " + file1
     hashes1 = sharkutils.verify_ssl_hashes_from_capfile(file1, port=port1)
+    print "Length of hashes1 is : " + str(len(hashes1))
     print "We're about to call get hashes from capfile with file name: " + file2
     hashes2 = sharkutils.verify_ssl_hashes_from_capfile(file2, port=port2)
-    
-   
+    print "Length of hashes2 is : " + str(len(hashes2))
+       
     if (role_string == 'es'):
         if (set(hashes2).issubset(set(hashes1))):
             print "The seller's capture file matches the escrow's capture file; \
@@ -74,6 +70,8 @@ def test_ssl_matching(file1,file2,role_string):
             print "The ssl traffic in the seller's capture file does not match \
                    \n that in the escrow capture file. The seller has not \
                        \n provided a genuine capture file."
+            intersection = [val for val in hashes2 if val in hashes1]
+            print "The intersection has length: " + str(len(intersection))
             exit()
     else:
         if set(hashes1) ==set(hashes2): 
@@ -81,6 +79,14 @@ def test_ssl_matching(file1,file2,role_string):
                 \n The buyer's ssl keys must be faulty."
         
         else:
+            intersection = [val for val in hashes2 if val in hashes1]
+            for hash in list(hashes1):
+                if hash not in intersection:
+                    print "from hash1, this hash was not found: " + str(hash)
+            for hash in list(hashes2):
+                if hash not in intersection:
+                    print "from hash2, this hash was not found: " + str(hash)
+            
             print "The ssl traffic in the capture file delivered by the seller \n \
                does not match that in the escrow capture file. The seller \n \
                has not provided a genuine capture file. "
@@ -103,7 +109,11 @@ if __name__ == "__main__":
     if int(level) == 99:
         test_ssl_matching(sys.argv[2],sys.argv[3], sys.argv[4])
         exit()
-        
+    if int(level) == 98:
+        port1 = shared.config.get("Buyer","buyer_proxy_port")
+        port2 = shared.config.get("Seller","seller_proxy_port")
+        sharkutils.debug_find_mismatch_frames(sys.argv[2],port1,sys.argv[3],port2)
+        exit()    
     if int(level) == 1:
         print 'Level 1 dispute not yet implemented'
         exit()

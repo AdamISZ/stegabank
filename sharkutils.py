@@ -1,3 +1,5 @@
+
+#====LIBRARY IMPORTS====
 import re
 import os
 import platform
@@ -5,49 +7,76 @@ import ConfigParser
 import shared
 import subprocess
 import hashlib
+#======================
 
-OS = platform.system()
-#AG wrapper for running tshark to extract data
+#====GLOBALS===========
+#required to address limit on length of filter string for tshark
+MAX_FRAME_FILTER = 500
+
+#======================
+
+#wrapper for running tshark to extract data
 #using the syntax -T fields
 #output is filtered by a list of frame numbers
 #and/or any other filter in Wireshark's -R syntax
 def tshark(infile, field='', filter='', frames=[]):
+    tshark_out = ''
+    if (frames and len(frames)>MAX_FRAME_FILTER):
+        #we will need to get our output in chunks to avoid
+        #issues with going over the hard limit on filter strings
+        #in *shark
+        start_window = 0
+        while (start_window+MAX_FRAME_FILTER < len(frames)):
+            print "starting a tshark run with start_window: " + str(start_window)
+            tshark_out += tshark_inner(infile,field=field,filter=filter, \
+            frames=frames[start_window:start_window+MAX_FRAME_FILTER])
+            start_window += MAX_FRAME_FILTER
+
+        tshark_out += tshark_inner(infile,field=field,filter=filter, \
+            frames=frames[start_window:])
+    else:
+        tshark_out += tshark_inner(infile,field=field,filter=filter, \
+        frames=frames)
+    #print "Final tshark output: \n" + tshark_out
+    return tshark_out   
+
+
+def tshark_inner(infile, field='', filter='', frames=[]):
     tshark_exepath =  shared.config.get("Exepaths","tshark_exepath")
-    
     args = [tshark_exepath,'-r',infile] 
     
-    if (not frames and not field):
-        args.append(filter)
-    #elif (not filter and not frames):
-    #    args = [args_stub]
-    elif (not filter):
-        args.extend(['-Y', '"frame.number ==', ' or frame.number=='.join(frames),'"'])
-    elif (not frames):
-        args.extend(['-Y',filter])
+    #this clunky structure is unfortunately necessary due to the vagaries
+    #of passing double quotes in argument lists
+    if (frames and not filter): 
+        args.extend(['-Y', 'frame.number==' + ' or frame.number=='.join(frames)])
+    elif (frames and filter):
+        args.extend(['-Y', 'frame.number==' + ' or frame.number=='.join(frames),' and ',filter])
+    else: #means - not frames
+        if (filter):
+            args.extend(['-Y',filter])
+            
+    if (field):
+        args.extend(['-T','fields','-e',field])
     else:
-        args.extend(['-Y', '"frame.number ==',' or frame.number=='.join(frames),' and ',filter,'"'])
-    if field:
-        args.extend(['-T','fields', '-e',field])
-    print args
+        args.append('-x')
+    
+    #command line is now built.
+    shared.debug(2,args)
     try:
         tshark_out =  subprocess.check_output(args)
     except:
         print 'Error starting tshark'
         return -1
-    return tshark_out   
-
-
-#AG wrapper for running editcap; -r is used
+    
+    return tshark_out
+    
+# wrapper for running editcap; -r is used
 #to include rather than remove frames, filter
 #is used to generate a list of frame numbers to include
-def editcap(infile, outfile, reverse = True, filter='', frames=[]):
+def editcap(infile, outfile, reverse_flag = 1, filter='', frames=[]):
     editcap_exepath =  shared.config.get("Exepaths","editcap_exepath")
     frame_list=''
-    args = [editcap_exepath]
-    if (reverse != 0):
-        args.extend(['-r',infile]) 
-    else:
-        args.append(infile)
+    args = [editcap_exepath, '-r' if reverse_flag else '', infile]
     
     if (frames):
         print "not yet implemented: list of frames passed to editcap"
@@ -66,7 +95,7 @@ def editcap(infile, outfile, reverse = True, filter='', frames=[]):
     args.append(outfile)   
     args.extend(frame_list)
     
-    retcode = subprocess.check_output(args)
+    return subprocess.check_output(args)
     
     
     
@@ -84,19 +113,20 @@ def get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list):
             print 'empty frame hex. Please investigate'
             cleanup_and_exit()
         ssl_hashes.append(hashlib.md5(bytearray.fromhex(s)).hexdigest()) 
-        #print "NUmber of hashes is now: ", len(ssl_hashes)
-    print ssl_hashes
-    return ssl_hashes
+        
+    return list(set(ssl_hashes))
 
-
+#single hash only from one string
+def get_ssl_hash(s):
+    s=s.rstrip().replace(',',' ').replace(':',' ')
+    return hashlib.md5(bytearray.fromhex(s)).hexdigest()
+    
 #this function is only going to extract the encrypted SSL data
 #which has been reassembled, to avoid possible issues with segmentation
 #of data being different between buyer and seller (i.e. try to ignore any
 #TCP-and-above issues as they may differ between buyer and seller)
 def verify_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
     
-    frames_wanted = []
-    frames_hashes = {}
     #Run tshark once to get a list of frames with ssl app data in them
     filterstr = 'ssl.record.content_type == 23'
     if (port > 0):
@@ -109,141 +139,105 @@ def verify_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
         return -1
     frames_str = frames_str.rstrip()
     ssl_frames = frames_str.split('\r\n')
-    print 'need to process this many frames:', len(ssl_frames)
-    
-    #the frame numbers are keys for the dictionary
-    #so we initialise them:
-    for frame in ssl_frames:
-        #print frame
-        frames_hashes[frame] = ''
 
-    #Run tshark a third time to store all the app data
-    #in memory. The frames have to be in the right order in the request
-    #so we sort the keys from the dict
-    #TODO: this should be a call to the generic tshark caller function,
-    #but I'm worried about the key point that the filter
-    #string must be in the right order.
-    frame_filter_string = ''
-    for key in sorted(frames_hashes.iterkeys()):
-        frame_filter_string = frame_filter_string + key + " or frame.number=="
-    frame_filter_string = frame_filter_string[:-18]
-    
-    tshark_args_seller_stub = shared.config.get("Exepaths","tshark_exepath") \
-        + ' -r ' + capfile + ' -Y "frame.number ==' + \
-        frame_filter_string
-        
-    tshark_args = tshark_args_seller_stub + '" -T fields -e ssl.app_data'
-    
-    try:
-        ssl_app_data = subprocess.check_output(tshark_args)
-    except:
-        print 'Exception in tshark'
-        return -1
-    
-    #ssl.segment.data will return all encrypted segments separated by commas
+    print 'need to process this many frames:', len(ssl_frames)
+    ssl_app_data = tshark(capfile,field='ssl.app_data',frames=ssl_frames)
+    #ssl.app_data will return all encrypted segments separated by commas
     #but also, lists of segments from different frames will be separated by
     #newlines
     ssl_app_data_list = ssl_app_data.replace(',','\n').split('\n')
     ssl_app_data_list = set(ssl_app_data_list)
     
     #for debug:
-    print "Length of list of ssl segments for file " + capfile + " was: " +str(len(ssl_app_data_list))
+    print "Length of list of ssl segments for file " + capfile + " was: " \
+    +str(len(ssl_app_data_list))
     
     return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
 
 
-def filter_cap_file(file, port,ssl=False):
+def debug_find_mismatch_frames(capfile1, port1, capfile2, port2):
     
-    #Build the filter string based on the port
-    if ssl:
-        filter_string = "tcp.port==" + str(port) + " and ssl"
+    frames_segments1 = debug_get_segments(capfile1, port1)
+    frames_segments2 = debug_get_segments(capfile2, port2)
+
+    #first find hashes which are different
+    hashes1 = []
+    hashes2 = []
+    for hashes in frames_segments1.values():
+        hashes1.extend(hashes)
+    for hashes in frames_segments2.values():
+        hashes2.extend(hashes)
     
+    shared.debug(1,["Here are hashes1: ",hashes1])
+    shared.debug(1,["Here are hashes2: ",hashes2])
+       
+    diff_hashes = set(hashes1).symmetric_difference(set(hashes2))
+    shared.debug(1,"All hashes which didn't match: " + str(diff_hashes))
+    
+    ok_frames_1 = []
+    ok_frames_2 = []
+    for frame1, hash1 in frames_segments1.iteritems():
+        for frame2, hash2 in frames_segments2.iteritems():
+            shared.debug(3,["frame1, frames 2 are now: " , frame1, " ", frame2])
+            for hasha in hash1:
+                for hashb in hash2:
+                    shared.debug(3,["Trying hashes1,2: ",hasha," ",hashb])
+                    if hasha == hashb:
+                        shared.debug(3,["Found a match between frame1 and frame2: ", frame1, " ", frame2])
+                        ok_frames_1.append(frame1)
+                        ok_frames_2.append(frame2)
+                
+    shared.debug(2,["OKFrames1: ",list(set(ok_frames_1))])
+    shared.debug(2,["OKFrames2: ",list(set(ok_frames_2))])
+    shared.debug(1,"Number of frames OK in first file: " + str(len(set(ok_frames_1))))
+    shared.debug(1,"Number of frames OK in second file: " + str(len(set(ok_frames_2))))
+    
+    for frame in [val for val in frames_segments1.iterkeys() if val not in ok_frames_1]:
+        print "Hash of segment in frame " + str(frame) + " in " + capfile1 \
+            + " was not found in any frame in " + capfile2 
+            
+    for frame in [val for val in frames_segments2.iterkeys() if val not in ok_frames_2]:
+        print "Hash of segment in frame " + str(frame) + " in " + capfile2 \
+            + " was not found in any frame in " + capfile1
 
 
-#This function is intended to get hashes of ALL ssl data
-#for now it's not known if this can be used;
-#TODO : remove this if it isn't needed or can't work    
-#pull the hashes of all ssl app data out of a capture file,
-#optionally including handshake/non-23 data (not implemented yet)
-def get_all_ssl_hashes_from_capfile(capfile, handshake= False, port= -1):
-    
-    frames_wanted = []
-    segments_hashes = {}
+
+
+def debug_get_segments(capfile,port):    
+    frames_segments = {}
     #Run tshark once to get a list of frames with ssl app data in them
-    filterstr = 'ssl'
-    if (port > 0):
-        filterstr = filterstr + ' and tcp.port=='+str(port)
+    filterstr = 'ssl.record.content_type==23 and tcp.port=='+str(port)
     try:
         frames_str = tshark(capfile,field='frame.number', \
                             filter= filterstr)
     except:
         print 'Exception in tshark'
         return -1
+    
+    #print frames_str
     frames_str = frames_str.rstrip()
-    ssl_frames = frames_str.split('\r\n')
+    ssl_frames = shared.pisp(frames_str)
     print 'need to process this many frames:', len(ssl_frames)
+    for frame in ssl_frames:
+        frames_segments[frame]= [] #array will contain all hashes for that frame
     
-    #Run tshark a second time to get the ssl.segment frames
-    #from the full list of frames
-    try:
-        segments_str = tshark(capfile,field='ssl.segment', \
-                              frames=ssl_frames)
-    except:
-        print 'Error starting tshark'
-        return -1
+    #A special run of tshark: here we need the frames to be listed in the right
+    #order
     
-    segments_str = segments_str.rstrip()    
-    segments = re.findall('\w+',segments_str) #entries separated by , \r \n
-
-    if len(segments) < 1:
-        print 'zero SSL segments, should be at least one. Please investigate'
-        cleanup_and_exit()
-    #there can be multiple SSL segments in the same frame, so remove duplicates
-    segments = set(segments)
-    print "Need to process this many segments: ", len(segments)
-    
-    #the frame numbers are keys for the dictionary
-    #so we initialise them:
-    for segment in segments:
-        segments_hashes[segment] = ''
-
-    #Run tshark a third time to store all the app data
-    #in memory. The frames have to be in the right order in the request
-    #so we sort the keys from the dict
-    #TODO: this should be a call to the generic tshark caller function,
-    #but I'm worried about the key point that the filter
-    #string must be in the right order.
-    frame_filter_string = ''
-    for key in sorted(segments_hashes.iterkeys()):
-        frame_filter_string = frame_filter_string + key + " or frame.number=="
-    frame_filter_string = frame_filter_string[:-18]
-    
-    tshark_args_seller_stub = shared.config.get("Exepaths","tshark_exepath") \
-        + ' -r ' + capfile + ' -Y "frame.number ==' + \
-        frame_filter_string
+    app_data_str = tshark(capfile,field='ssl.app_data',frames=ssl_frames)
+    app_data_str = app_data_str.rstrip()
+    app_data_output = shared.pisp(app_data_str)
+    shared.debug(3,app_data_output)
+    #now app_data_output is a list, each element of which is the complete
+    #output of ssl.app_data for each frame consecutively
+    x=0
+    for frame in ssl_frames:
+        segments = app_data_output[x].split(',')
+        for segment in segments:
+            frames_segments[frame].append(get_ssl_hash(segment))
         
-    tshark_args = tshark_args_seller_stub + '" -T fields -e ssl.app_data'
+        shared.debug(3,["Frame: ", frame, frames_segments[frame]])
+        x += 1
     
-    try:
-        ssl_app_data = subprocess.check_output(tshark_args)
-    except:
-        print 'Exception in tshark'
-        return -1
-    
-    ssl_app_data_list = ssl_app_data.split('\n')
-    return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    return frames_segments
     
