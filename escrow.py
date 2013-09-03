@@ -41,12 +41,18 @@ def test_ssl_matching(file1,file2,role_string):
     if (role_string == 'bs'):
         port1 = int(shared.config.get("Buyer","buyer_proxy_port"))
         port2 = int(shared.config.get("Seller","seller_proxy_port"))
+        userOS1 = shared.config.get("Buyer","buyer_OS")
+        userOS2 = shared.config.get("Seller","seller_OS")
     elif (role_string == 'es'):
         port1 = int(shared.config.get("Escrow","escrow_port"))
         port2 = int(shared.config.get("Seller","seller_proxy_port"))
+        userOS1 = shared.config.get("Escrow","escrow_OS")
+        userOS2 = shared.config.get("Seller","seller_OS")
     elif (role_string == 'be'):
         port1 = int(shared.config.get("Buyer","buyer_proxy_port"))
         port2 = int(shared.config.get("Escrow","escrow_port"))
+        userOS1 = shared.config.get("Buyer","buyer_OS")
+        userOS2 = shared.config.get("Escrow","escrow_OS")
     else:
         print "error, incorrect role string passed to test_ssl_matching()"
         exit()
@@ -54,12 +60,16 @@ def test_ssl_matching(file1,file2,role_string):
     #preparatory step: filter and reduce files
     #to contain only SSL data and only data for the right port:
     
-    print "We're about to call get hashes from capfile with file name: " + file1
-    hashes1 = sharkutils.verify_ssl_hashes_from_capfile(file1, port=port1)
-    print "Length of hashes1 is : " + str(len(hashes1))
-    print "We're about to call get hashes from capfile with file name: " + file2
-    hashes2 = sharkutils.verify_ssl_hashes_from_capfile(file2, port=port2)
-    print "Length of hashes2 is : " + str(len(hashes2))
+    shared.debug(1, \
+    ["We're about to call get hashes from capfile with file name: ",file1])
+    hashes1 = sharkutils.get_all_ssl_hashes_from_capfile(file1,  \
+                port=port1,userOS=userOS1)
+    shared.debug(1,["Length of hashes1 is : ",str(len(hashes1))])
+    shared.debug(1, \
+    ["We're about to call get hashes from capfile with file name: ",file2])
+    hashes2 = sharkutils.get_all_ssl_hashes_from_capfile(file2, \
+            port=port2,userOS=userOS2)
+    shared.debug(1,["Length of hashes2 is : ",str(len(hashes2))])
        
     if (role_string == 'es'):
         if (set(hashes2).issubset(set(hashes1))):
@@ -113,7 +123,13 @@ if __name__ == "__main__":
         port1 = shared.config.get("Buyer","buyer_proxy_port")
         port2 = shared.config.get("Seller","seller_proxy_port")
         sharkutils.debug_find_mismatch_frames(sys.argv[2],port1,sys.argv[3],port2)
-        exit()    
+        exit() 
+    if int(level) == 97:
+        port1 = shared.config.get("Buyer","buyer_proxy_port")
+        port2 = shared.config.get("Seller","seller_proxy_port")
+        sharkutils.debug_find_mismatch_frames_stream_filter(sys.argv[2],port1,sys.argv[3],port2)
+        exit()
+        
     if int(level) == 1:
         print 'Level 1 dispute not yet implemented'
         exit()

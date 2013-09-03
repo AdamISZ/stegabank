@@ -28,4 +28,4 @@ def pisp(x):
 #elementary debug calls with different levels:
 def debug(level,message):
     if level <= int(config.get("Debug","level")):
-        print message
+        print ' '.join(str(x) for x in message)
