@@ -67,7 +67,7 @@ def tshark_inner(infile, field='', filter='', frames=[]):
         tshark_out =  subprocess.check_output(args)
     except:
         print 'Error starting tshark'
-        return -1
+        exit()
     
     return tshark_out
 
@@ -131,8 +131,27 @@ def editcap_inner(args,frames,outfile):
             os.remove(filename) 
             
        
+
+def mergecap(outfile,infiles):
+    args = [shared.config.get("Exepaths","mergecap_exepath"),'-w',outfile]
+    args.extend(infiles)
+    try:
+        subprocess.check_output(args)
+    except:
+        shared.debug(0,["Error in mergecap execution, quitting!"])
+        exit()
     
-    
+#for merging individual stream files created by stcppipe
+def merge_stcppipe_streams(filename, bad_files=[]):
+    stcp_files=[]
+    location = shared.config.get("Directories","stcppipe_logdir")
+    for capfile in os.listdir(location):
+        if capfile not in bad_files:
+            stcp_files.append(os.path.join(location, capfile))
+            #shared.debug(1,["Processing stcppipe file:", full_capfile])
+        mergecap(os.path.join(location,"merged.pcap"),stcp_files)
+            
+            
 def get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list):
     
     ssl_hashes = []
@@ -142,9 +161,12 @@ def get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list):
         s = s.rstrip()
         s = s.replace(',',' ')
         s = s.replace(':',' ')
-        if s == ' ':
-            print 'empty frame hex. Please investigate'
-            cleanup_and_exit()
+        
+        #possible bug identified 3rd Sept 2013; 
+        #should this be checking for ' ' or '' or both?
+        if s == '':
+            shared.debug(1,["Error; empty ssl app data string passed for hashing!"])
+            exit()
         ssl_hashes.append(hashlib.md5(bytearray.fromhex(s)).hexdigest()) 
         
     return list(set(ssl_hashes))
@@ -158,79 +180,79 @@ def get_ssl_hash(s):
 #which has been reassembled, to avoid possible issues with segmentation
 #of data being different between buyer and seller (i.e. try to ignore any
 #TCP-and-above issues as they may differ between buyer and seller)
-#
-#Addition 2nd Sept 2013: in case user uses Windows, then the capture file
-#will be polluted with retransmissions; to deal with this we collect all
-#hashes before and after removal of retransmissions and take the union of
-#the two sets. 
-def get_all_ssl_hashes_from_capfile(capfile, handshake= False, port= -1,userOS='Windows'):
+#4 Sep 2013 rewrite to use stcppipe instead of gateway bouncing
+def get_all_ssl_hashes_from_capfile(capfile, handshake= False, port= -1,userOS='Undefined'):
     if userOS=='Windows':
-        hashes1 = get_ssl_hashes_from_capfile(capfile=capfile,port=port,fr=True)
-        hashes2 = get_ssl_hashes_from_capfile(capfile=capfile,port=port,fr=False)
-        return list(set(hashes1).union(set(hashes2)))
+        hashes = []
+        #stcppipe logs multiple capfiles, one per directory
+        for capfile in os.listdir(shared.config.get("Directories", \
+                                                    "stcppipe_logdir")):
+            full_capfile = os.path.join( \
+                shared.config.get("Directories","stcppipe_logdir"), capfile)
+            shared.debug(1,["Processing stcppipe file:", full_capfile])
+            stream_hashes = get_ssl_hashes_from_capfile(capfile=full_capfile, \
+                                                        port=port)
+            if (stream_hashes):
+                hashes.extend(stream_hashes)
+        return hashes
     elif userOS=='Linux':
-        return get_ssl_hashes_from_capfile(capfile=capfile,port=port,fr=False)
+        return get_ssl_hashes_from_capfile(capfile=capfile,port=port)
     else:
         shared.debug(1,"Operating system not recognized")
         exit()
-    
-def get_ssl_hashes_from_capfile(capfile,port=-1,fr=False):
-    
-    if (fr):
-        #we need to use editcap to get rid of all frames marked retransmission
-        #in order to build in steps, we'll need frames to KEEP, hence filterstr
-        filterstr = 'not tcp.analysis.retransmission'
-        frames_str = tshark(capfile,field='frame.number',filter=filterstr)
-        frames_str = frames_str.rstrip()
-        non_retransmission_frames = shared.pisp(frames_str)
-        shared.debug(2,["These are the non retransmission frames: " \
-                        ,non_retransmission_frames])
-        #get rid of any null values
-        non_retransmission_frames = filter(None,non_retransmission_frames)
-        #now we have a list of all the frames to keep
         
-        if (non_retransmission_frames):
-            edited_file = capfile + ".tmp"
-            editcap_message = editcap(capfile,edited_file,reverse_flag=1, \
-                                      frames=non_retransmission_frames)
-            shared.debug(2,[editcap_message])
-        else:
-            shared.debug(1,["All frames were retransmissions. Cannot get hashes."])
-            exit()
-    else:
-        edited_file=capfile
-            
+        
+def get_ssl_hashes_from_capfile(capfile,port=-1):
+
     #Run tshark to get a list of frames with ssl app data in them
     filterstr = 'ssl.record.content_type == 23'
+    frames_str=''
     if (port > 0):
         filterstr = filterstr + ' and tcp.port=='+str(port)
     try:
-        frames_str = tshark(edited_file,field='frame.number', \
+        frames_str = tshark(capfile,field='frame.number', \
                             filter= filterstr)
     except:
-        print 'Exception in tshark'
-        return -1
+        #this could be caused by a corrupt file from stcppipe
+        #or by a malformed query string,etc. - but in the former
+        #case we should NOT exit, hence this approach
+        shared.debug(0,["tshark failed - see stderr for message"])
+        shared.debug(0,["return code from tshark: ",frames_str])
+        return None
     frames_str = frames_str.rstrip()
     ssl_frames = shared.pisp(frames_str)
-
+    #gracefully handle null result (i.e. blank tshark output):
+    ssl_frames = filter(None,ssl_frames)
+    if not ssl_frames:
+        return None
+    
+    #Now we definitely have ssl frames in this capture file
     shared.debug(1,['need to process this many frames:', len(ssl_frames)])
-    ssl_app_data = tshark(edited_file,field='ssl.app_data',frames=ssl_frames)
+    ssl_app_data = tshark(capfile,field='ssl.app_data',frames=ssl_frames)
     #ssl.app_data will return all encrypted segments separated by commas
     #but also, lists of segments from different frames will be separated by
     #newlines
-    ssl_app_data_list = ssl_app_data.replace(',','\n').split('\n')
-    ssl_app_data_list = set(ssl_app_data_list)
+    ssl_app_data_list = ssl_app_data.rstrip().replace(',','\n').split('\n')
+    #remove any blank OR duplicate entries in the ssl app data list
+    ssl_app_data_list = filter(None,list(set(ssl_app_data_list)))
     
-    #for debug:
-    shared.debug(1,["Length of list of ssl segments for file ",edited_file," was: " \
+    shared.debug(1,["Length of list of ssl segments for file ",capfile," was: " \
     ,str(len(ssl_app_data_list))])
     
     return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
     
 
-def debug_find_mismatch_frames(capfile1, port1, capfile2, port2):
+#detailed analysis of frame numbers:
+#first capfile is buyer, second is seller
+#if buyer is windows, we abandon finding frames there
+#as it is split into streams)
+def debug_find_mismatch_frames(capfile1, port1, capfile2, port2,buyerOS=''):
     
-    frames_segments1 = debug_get_segments(capfile1, port1)
+    if (buyerOS == "Windows"):
+        frames_segments1={1:get_all_ssl_hashes_from_capfile(capfile1, port1,userOS='Windows')}
+    else:
+        frames_segments1 = debug_get_segments(capfile1, port1)
+        
     frames_segments2 = debug_get_segments(capfile2, port2)
 
     #first find hashes which are different
@@ -240,11 +262,20 @@ def debug_find_mismatch_frames(capfile1, port1, capfile2, port2):
         hashes1.extend(hashes)
     for hashes in frames_segments2.values():
         hashes2.extend(hashes)
+        
+    #3rd Sept 2013: correction of bug
+    #these hash lists included repeats
+    hashes1 = list(set(hashes1))
+    hashes2 = list(set(hashes2))
     
-    shared.debug(2,["Here are hashes1: ",hashes1])
-    shared.debug(2,["Here are hashes2: ",hashes2])
-       
+    shared.debug(1,["Length of hashes1 is: ", len(hashes1)])
+    shared.debug(1,["Length of hashes2 is: ", len(hashes2)])
+    shared.debug(2,[" and Here are hashes1: ",hashes1])
+    shared.debug(2,[" and Here are hashes2: ",hashes2])
+     
+    #mismatches are (union-intersection) of two sets:   
     diff_hashes = set(hashes1).symmetric_difference(set(hashes2))
+    
     shared.debug(1,["All hashes which didn't match: ",str(diff_hashes)])
     
     ok_frames_1 = []
@@ -296,9 +327,6 @@ def debug_get_segments(capfile,port,stream=''):
     for frame in ssl_frames:
         frames_segments[frame]= [] #array will contain all hashes for that frame
     
-    #A special run of tshark: here we need the frames to be listed in the right
-    #order
-    
     app_data_str = tshark(capfile,field='ssl.app_data',frames=ssl_frames)
     app_data_str = app_data_str.rstrip()
     app_data_output = shared.pisp(app_data_str)
@@ -308,6 +336,7 @@ def debug_get_segments(capfile,port,stream=''):
     x=0
     for frame in ssl_frames:
         segments = app_data_output[x].split(',')
+        segments = filter(None,segments) # make sure that segments is empty if there's no data!
         for segment in segments:
             frames_segments[frame].append(get_ssl_hash(segment))
         
@@ -343,6 +372,84 @@ def debug_find_mismatch_frames_stream_filter(capfile1,port1,capfile2,port2):
             shared.debug(2,[editcap_message])
             shared.debug(1,["About to start a debug run for stream: ",stream])
             debug_find_mismatch_frames(outfile,port1,capfile2,port2)
-        
+
+
+#===========================================================================
+#defunct below
+#===========================================================================
+#this function is only going to extract the hashes of the encrypted SSL data
+#which has been reassembled, to avoid possible issues with segmentation
+#of data being different between buyer and seller (i.e. try to ignore any
+#TCP-and-above issues as they may differ between buyer and seller)
+#
+#Addition 2nd Sept 2013: in case user uses Windows, then the capture file
+#will be polluted with retransmissions; to deal with this we collect all
+#hashes before and after removal of retransmissions and take the union of
+#the two sets. 
+#4 SEP 2013 as of now defunct since bouncing no longer necessary (stcppipe)
+def gwbounce_get_all_ssl_hashes_from_capfile(capfile, handshake= False, port= -1,userOS='Undefined'):
+    if userOS=='Windows':
+        hashes1 = get_ssl_hashes_from_capfile(capfile=capfile,port=port,fr=True)
+        hashes2 = get_ssl_hashes_from_capfile(capfile=capfile,port=port,fr=False)
+       
+        return list(set(hashes1).union(set(hashes2)))
+    elif userOS=='Linux':
+        return get_ssl_hashes_from_capfile(capfile=capfile,port=port,fr=False)
+    else:
+        shared.debug(1,"Operating system not recognized")
+        exit()
+
+#4 Sep 2013 as of now defunct since bouncing no longer necessary (stcppipe)
+def gwbounce_get_ssl_hashes_from_capfile(capfile,port=-1,fr=False):
     
+    if (fr):
+        #we need to use editcap to get rid of all frames marked retransmission
+        #in order to build in steps, we'll need frames to KEEP, hence filterstr
+        filterstr = 'not tcp.analysis.retransmission'
+        frames_str = tshark(capfile,field='frame.number',filter=filterstr)
+        frames_str = frames_str.rstrip()
+        non_retransmission_frames = shared.pisp(frames_str)
+        shared.debug(2,["These are the non retransmission frames: " \
+                        ,non_retransmission_frames])
+        #get rid of any null values
+        non_retransmission_frames = filter(None,non_retransmission_frames)
+        #now we have a list of all the frames to keep
+        
+        if (non_retransmission_frames):
+            edited_file = capfile + ".tmp"
+            editcap_message = editcap(capfile,edited_file,reverse_flag=1, \
+                                      frames=non_retransmission_frames)
+            shared.debug(2,[editcap_message])
+        else:
+            shared.debug(1,["All frames were retransmissions. Cannot get hashes."])
+            exit()
+    else:
+        edited_file=capfile
+            
+    #Run tshark to get a list of frames with ssl app data in them
+    filterstr = 'ssl.record.content_type == 23'
+    if (port > 0):
+        filterstr = filterstr + ' and tcp.port=='+str(port)
+    try:
+        frames_str = tshark(edited_file,field='frame.number', \
+                            filter= filterstr)
+    except:
+        print 'Exception in tshark'
+        return -1
+    frames_str = frames_str.rstrip()
+    ssl_frames = shared.pisp(frames_str)
+
+    shared.debug(1,['need to process this many frames:', len(ssl_frames)])
+    ssl_app_data = tshark(edited_file,field='ssl.app_data',frames=ssl_frames)
+    #ssl.app_data will return all encrypted segments separated by commas
+    #but also, lists of segments from different frames will be separated by
+    #newlines
+    ssl_app_data_list = ssl_app_data.rstrip().replace(',','\n').split('\n')
+    #remove any blank OR duplicate entries in the ssl app data list
+    ssl_app_data_list = filter(None,list(set(ssl_app_data_list)))
+    
+    shared.debug(1,["Length of list of ssl segments for file ",edited_file," was: " \
+    ,str(len(ssl_app_data_list))])
+    
+    return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
     

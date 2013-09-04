@@ -1,6 +1,7 @@
 softwareVersion = '0.0.1'
 verbose = 1
 import os
+import inspect
 import platform
 import ConfigParser
 import subprocess
@@ -28,4 +29,4 @@ def pisp(x):
 #elementary debug calls with different levels:
 def debug(level,message):
     if level <= int(config.get("Debug","level")):
-        print ' '.join(str(x) for x in message)
+        print 'function: ', inspect.stack()[1][3], ': ',' '.join(str(x) for x in message)

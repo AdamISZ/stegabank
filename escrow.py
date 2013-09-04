@@ -64,12 +64,12 @@ def test_ssl_matching(file1,file2,role_string):
     ["We're about to call get hashes from capfile with file name: ",file1])
     hashes1 = sharkutils.get_all_ssl_hashes_from_capfile(file1,  \
                 port=port1,userOS=userOS1)
-    shared.debug(1,["Length of hashes1 is : ",str(len(hashes1))])
+    shared.debug(1,["Length of hashes1 is : ",len(hashes1)])
     shared.debug(1, \
     ["We're about to call get hashes from capfile with file name: ",file2])
     hashes2 = sharkutils.get_all_ssl_hashes_from_capfile(file2, \
             port=port2,userOS=userOS2)
-    shared.debug(1,["Length of hashes2 is : ",str(len(hashes2))])
+    shared.debug(1,["Length of hashes2 is : ",len(hashes2)])
        
     if (role_string == 'es'):
         if (set(hashes2).issubset(set(hashes1))):
@@ -92,10 +92,10 @@ def test_ssl_matching(file1,file2,role_string):
             intersection = [val for val in hashes2 if val in hashes1]
             for hash in list(hashes1):
                 if hash not in intersection:
-                    print "from hash1, this hash was not found: " + str(hash)
+                    print "This hash from buyer was not found in seller list: " + str(hash)
             for hash in list(hashes2):
                 if hash not in intersection:
-                    print "from hash2, this hash was not found: " + str(hash)
+                    print "This hash from seller was not found in buyer list: " + str(hash)
             
             print "The ssl traffic in the capture file delivered by the seller \n \
                does not match that in the escrow capture file. The seller \n \
@@ -122,7 +122,8 @@ if __name__ == "__main__":
     if int(level) == 98:
         port1 = shared.config.get("Buyer","buyer_proxy_port")
         port2 = shared.config.get("Seller","seller_proxy_port")
-        sharkutils.debug_find_mismatch_frames(sys.argv[2],port1,sys.argv[3],port2)
+        buyer_OS=shared.config.get("Buyer","buyer_OS")
+        sharkutils.debug_find_mismatch_frames(sys.argv[2],port1,sys.argv[3],port2,buyer_OS)
         exit() 
     if int(level) == 97:
         port1 = shared.config.get("Buyer","buyer_proxy_port")
