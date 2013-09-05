@@ -116,12 +116,12 @@ def editcap_inner(args,frames,outfile):
             tmpargs.append(filename)
             tmpargs.extend(frames[start_window:start_window+MAX_FRAME_FILTER])
             #shared.debug(1,["Here is the call to editcap: ", tmpargs])
-            shared.debug(3,subprocess.check_output(tmpargs))
+            shared.debug(4,subprocess.check_output(tmpargs))
             start_window += MAX_FRAME_FILTER
         
         args.append(outfile+".tmp."+str(start_window))
         args.extend(frames[start_window:])
-        shared.debug(3,subprocess.check_output(args))
+        shared.debug(4,subprocess.check_output(args))
         #Lastly, need to concatenate and delete all the temporary files
         args = [shared.config.get("Exepaths","mergecap_exepath"),'-w',outfile]
         args.extend(filenames)
@@ -142,6 +142,8 @@ def mergecap(outfile,infiles):
         exit()
     
 #for merging individual stream files created by stcppipe
+#noted 5th September: merged file from stcppipe doesn't seem to
+#assemble itself correctly; ignored for now
 def merge_stcppipe_streams(filename, bad_files=[]):
     stcp_files=[]
     location = shared.config.get("Directories","stcppipe_logdir")
@@ -181,25 +183,27 @@ def get_ssl_hash(s):
 #of data being different between buyer and seller (i.e. try to ignore any
 #TCP-and-above issues as they may differ between buyer and seller)
 #4 Sep 2013 rewrite to use stcppipe instead of gateway bouncing
-def get_all_ssl_hashes_from_capfile(capfile, handshake= False, port= -1,userOS='Undefined'):
-    if userOS=='Windows':
+#The first argument CAPFILE can take one of two possible forms:
+#either the full path of a single pcap file (if captured using dumpcap)
+#or a full path to a directory containing a set of acp files collected by stcppipe
+def get_all_ssl_hashes_from_capfile(capfile, handshake= False, port= -1,stcp_flag=False):
+    if stcp_flag:
         hashes = []
-        #stcppipe logs multiple capfiles, one per directory
-        for capfile in os.listdir(shared.config.get("Directories", \
-                                                    "stcppipe_logdir")):
-            full_capfile = os.path.join( \
-                shared.config.get("Directories","stcppipe_logdir"), capfile)
+        #here "capfile" is not actually a file, it's the directory
+        #containing all the per-stream captures.
+        #(stcppipe logs multiple capfiles, one per stream)
+        for each_file in os.listdir(capfile):
+            full_capfile = os.path.join(capfile, each_file)
             shared.debug(1,["Processing stcppipe file:", full_capfile])
             stream_hashes = get_ssl_hashes_from_capfile(capfile=full_capfile, \
                                                         port=port)
             if (stream_hashes):
+                shared.debug(1,["Got hashes:",stream_hashes])
                 hashes.extend(stream_hashes)
         return hashes
-    elif userOS=='Linux':
-        return get_ssl_hashes_from_capfile(capfile=capfile,port=port)
     else:
-        shared.debug(1,"Operating system not recognized")
-        exit()
+        return get_ssl_hashes_from_capfile(capfile=capfile,port=port)
+        
         
         
 def get_ssl_hashes_from_capfile(capfile,port=-1):
@@ -282,12 +286,12 @@ def debug_find_mismatch_frames(capfile1, port1, capfile2, port2,buyerOS=''):
     ok_frames_2 = []
     for frame1, hash1 in frames_segments1.iteritems():
         for frame2, hash2 in frames_segments2.iteritems():
-            shared.debug(3,["frame1, frames 2 are now: " , frame1, " ", frame2])
+            shared.debug(4,["frame1, frames 2 are now: " , frame1, " ", frame2])
             for hasha in hash1:
                 for hashb in hash2:
-                    shared.debug(3,["Trying hashes1,2: ",hasha," ",hashb])
+                    shared.debug(4,["Trying hashes1,2: ",hasha," ",hashb])
                     if hasha == hashb:
-                        shared.debug(3,["Found a match between frame1 and frame2: ", frame1, " ", frame2])
+                        shared.debug(3,["Found a match between frame1 and frame2: ", frame1,hasha, " ", frame2,hashb])
                         ok_frames_1.append(frame1)
                         ok_frames_2.append(frame2)
                 
@@ -330,7 +334,7 @@ def debug_get_segments(capfile,port,stream=''):
     app_data_str = tshark(capfile,field='ssl.app_data',frames=ssl_frames)
     app_data_str = app_data_str.rstrip()
     app_data_output = shared.pisp(app_data_str)
-    shared.debug(3,app_data_output)
+    shared.debug(4,app_data_output)
     #now app_data_output is a list, each element of which is the complete
     #output of ssl.app_data for each frame consecutively
     x=0
@@ -345,42 +349,12 @@ def debug_get_segments(capfile,port,stream=''):
     
     return frames_segments
 
-def debug_get_streams(capfile):
-    streams_output = tshark(capfile,field='tcp.stream')
-    streams_output = streams_output.rstrip()
-    streams = shared.pisp(streams_output)
-    return list(set(streams))
-    
-def debug_find_mismatch_frames_stream_filter(capfile1,port1,capfile2,port2):
-    
-    #get list of all streams
-    streams = debug_get_streams(capfile1)
-    shared.debug(1,["Here are the streams: ",streams])
-    for stream in streams:
-        shared.debug(1,["Starting work on stream: ", stream])
-        #get list of frames to remove
-        filterstr = 'tcp.stream==' + stream + ' and tcp.analysis.retransmission'
-        frames_str = tshark(capfile1,field='frame.number',filter=filterstr)
-        frames_str = frames_str.rstrip()
-        retransmission_frames = shared.pisp(frames_str)
-        shared.debug(1,retransmission_frames)
-        retransmission_frames = filter(None,retransmission_frames)
-        #now we have a list of all the frames to remove, pass it to editcap:
-        if (retransmission_frames):
-            outfile = capfile1 + stream
-            editcap_message = editcap(capfile1,outfile,0,frames=retransmission_frames)
-            shared.debug(2,[editcap_message])
-            shared.debug(1,["About to start a debug run for stream: ",stream])
-            debug_find_mismatch_frames(outfile,port1,capfile2,port2)
 
 
 #===========================================================================
 #defunct below
 #===========================================================================
-#this function is only going to extract the hashes of the encrypted SSL data
-#which has been reassembled, to avoid possible issues with segmentation
-#of data being different between buyer and seller (i.e. try to ignore any
-#TCP-and-above issues as they may differ between buyer and seller)
+#see get_all_ssl_hashes_from_capfile
 #
 #Addition 2nd Sept 2013: in case user uses Windows, then the capture file
 #will be polluted with retransmissions; to deal with this we collect all
@@ -452,4 +426,34 @@ def gwbounce_get_ssl_hashes_from_capfile(capfile,port=-1,fr=False):
     ,str(len(ssl_app_data_list))])
     
     return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
+    
+    
+def debug_get_streams(capfile):
+    streams_output = tshark(capfile,field='tcp.stream')
+    streams_output = streams_output.rstrip()
+    streams = shared.pisp(streams_output)
+    return list(set(streams))
+    
+def debug_find_mismatch_frames_stream_filter(capfile1,port1,capfile2,port2):
+    
+    #get list of all streams
+    streams = debug_get_streams(capfile1)
+    shared.debug(1,["Here are the streams: ",streams])
+    for stream in streams:
+        shared.debug(1,["Starting work on stream: ", stream])
+        #get list of frames to remove
+        filterstr = 'tcp.stream==' + stream + ' and tcp.analysis.retransmission'
+        frames_str = tshark(capfile1,field='frame.number',filter=filterstr)
+        frames_str = frames_str.rstrip()
+        retransmission_frames = shared.pisp(frames_str)
+        shared.debug(1,retransmission_frames)
+        retransmission_frames = filter(None,retransmission_frames)
+        #now we have a list of all the frames to remove, pass it to editcap:
+        if (retransmission_frames):
+            outfile = capfile1 + stream
+            editcap_message = editcap(capfile1,outfile,0,frames=retransmission_frames)
+            shared.debug(2,[editcap_message])
+            shared.debug(1,["About to start a debug run for stream: ",stream])
+            debug_find_mismatch_frames(outfile,port1,capfile2,port2)
+
     

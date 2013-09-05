@@ -25,7 +25,7 @@
 import sys
 import subprocess
 import shutil
-#import os
+import os
 #import requests
 import time
 #import signal
@@ -33,12 +33,21 @@ import re
 import shared
 import sharkutils 
 import helper_startup
+import argparse
 #=====END LIBRARY IMPORTS==========
 
 
-def test_ssl_matching(file1,file2,role_string):
+#This function is intended to VERIFY whether the ssl data in the given
+#trace files matches appropriately as expected. It does not give a detailed
+#breakdown of any unexpected mismatches between those files. For that purpose
+#use escrow.py 98 (debug facility)
+def test_ssl_matching(runID,file1,file2,role_string):
     
-    if (role_string == 'bs'):
+    #preparatory: configure appropriate variables
+    if not runID:
+        shared.debug(0,["Critical error: runID must be provided. Quitting."])
+        exit()
+    if (not role_string or role_string == 'bs'):
         port1 = int(shared.config.get("Buyer","buyer_proxy_port"))
         port2 = int(shared.config.get("Seller","seller_proxy_port"))
         userOS1 = shared.config.get("Buyer","buyer_OS")
@@ -56,20 +65,43 @@ def test_ssl_matching(file1,file2,role_string):
     else:
         print "error, incorrect role string passed to test_ssl_matching()"
         exit()
-        
-    #preparatory step: filter and reduce files
-    #to contain only SSL data and only data for the right port:
     
-    shared.debug(1, \
-    ["We're about to call get hashes from capfile with file name: ",file1])
-    hashes1 = sharkutils.get_all_ssl_hashes_from_capfile(file1,  \
-                port=port1,userOS=userOS1)
+    if (file1): #buyer is using dumpcap, provided filename
+        file1 = os.path.join( \
+        shared.config.get("Directories","escrow_base_dir"),runID,file1)
+        shared.debug(1, \
+        ["We're about to call get hashes from capfile with file name: ",file1])
+        hashes1 = sharkutils.get_all_ssl_hashes_from_capfile(file1,  \
+        port=port1,stcp_flag=False)
+    else:
+        #construct location of stcppipe files
+        stcp_log_dir = os.path.join( \
+        shared.config.get("Directories","escrow_base_dir"), \
+        runID,"stcp_buyer")
+        hashes1 = sharkutils.get_all_ssl_hashes_from_capfile(stcp_log_dir, \
+        port=port1,stcp_flag=True)
+    
     shared.debug(1,["Length of hashes1 is : ",len(hashes1)])
-    shared.debug(1, \
-    ["We're about to call get hashes from capfile with file name: ",file2])
-    hashes2 = sharkutils.get_all_ssl_hashes_from_capfile(file2, \
-            port=port2,userOS=userOS2)
+    
+    
+    if (file2): #seller is using dumpcap, provided filename
+        file2 = os.path.join( \
+        shared.config.get("Directories","escrow_base_dir"),runID,file2)
+        shared.debug(1, \
+        ["We're about to call get hashes from capfile with file name: ",file2])
+        hashes2 = sharkutils.get_all_ssl_hashes_from_capfile(file2,  \
+        port=port2,stcp_flag=False)
+        
+    else:
+        #construct location of stcppipe files
+        stcp_log_dir = os.path.join( \
+        shared.config.get("Directories","escrow_base_dir"), \
+        runID,"stcp_seller")
+        hashes2 = sharkutils.get_all_ssl_hashes_from_capfile(stcp_log_dir, \
+        port=port2,stcp_flag=True)   
+    
     shared.debug(1,["Length of hashes2 is : ",len(hashes2)])
+    
        
     if (role_string == 'es'):
         if (set(hashes2).issubset(set(hashes1))):
@@ -110,31 +142,41 @@ if __name__ == "__main__":
     #========================
     helper_startup.loadconfig()
     
-    if len(sys.argv) < 3:
+    #parse the command line arguments
+    parser = argparse.ArgumentParser(description='ssllog escrow script')
+    parser.add_argument('mode',type=int,help="running mode: choose from 98 or 99")
+    parser.add_argument('runID',help="enter the unique name of the directory containing the trace data for this run")
+    parser.add_argument('-b',help="enter relative path to the buyer network trace file, NOT to be used with stcppipe")
+    parser.add_argument('-s',help="enter relative path to the seller network trace file, NOT to be used with stcppipe")
+    parser.add_argument('-r',help="enter one of \'bs\' (buyer-seller), \'es\' (escrow-seller) or \'be\' (buyer-escrow). Default is \'bs\'")
+    args = parser.parse_args()
+    
+    if len(sys.argv) < 2:
         print 'Usage escrow.py 0/1/2/3 [transactionid] [ssl key file] [stunnel key file] [L1filter]'
         exit()
     level = sys.argv[1]
 
     #testing core functionality TODO remove from prod
-    if int(level) == 99:
-        test_ssl_matching(sys.argv[2],sys.argv[3], sys.argv[4])
+    if args.mode == 99:
+        #args after 99: run_id [-b buyerfile] [-s sellerfile] [-r rolestring]
+        test_ssl_matching(args.runID, args.b,args.s, args.r)
         exit()
-    if int(level) == 98:
+    if args.mode == 98:
         port1 = shared.config.get("Buyer","buyer_proxy_port")
         port2 = shared.config.get("Seller","seller_proxy_port")
         buyer_OS=shared.config.get("Buyer","buyer_OS")
         sharkutils.debug_find_mismatch_frames(sys.argv[2],port1,sys.argv[3],port2,buyer_OS)
         exit() 
-    if int(level) == 97:
+    if args.mode == 97:
         port1 = shared.config.get("Buyer","buyer_proxy_port")
         port2 = shared.config.get("Seller","seller_proxy_port")
         sharkutils.debug_find_mismatch_frames_stream_filter(sys.argv[2],port1,sys.argv[3],port2)
         exit()
         
-    if int(level) == 1:
+    if args.mode == 1:
         print 'Level 1 dispute not yet implemented'
         exit()
-    elif int(level) !=2:
+    elif args.mode !=2:
         print 'Only level 2 dispute currently implemented'
         exit()
 
