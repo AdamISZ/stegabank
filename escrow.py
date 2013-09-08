@@ -158,20 +158,32 @@ if __name__ == "__main__":
 
     #testing core functionality TODO remove from prod
     if args.mode == 99:
-        #args after 99: run_id [-b buyerfile] [-s sellerfile] [-r rolestring]
         test_ssl_matching(args.runID, args.b,args.s, args.r)
         exit()
     if args.mode == 98:
+        #7 Sep 2013: for now, only implemented the buyer-seller version
+        if (args.b):
+            file1 = os.path.join(shared.config.get("Directories","escrow_base_dir"),args.runID,args.b)
+        else:
+            file1 = os.path.join(shared.config.get("Directories","escrow_base_dir"),args.runID,"stcp_buyer")
+        if (args.s):
+            file2 = os.path.join(shared.config.get("Directories","escrow_base_dir"),args.runID,args.s)
+        else:
+            file2 = os.path.join(shared.config.get("Directories","escrow_base_dir"),args.runID,"stcp_seller")
+            
         port1 = shared.config.get("Buyer","buyer_proxy_port")
         port2 = shared.config.get("Seller","seller_proxy_port")
-        buyer_OS=shared.config.get("Buyer","buyer_OS")
-        sharkutils.debug_find_mismatch_frames(sys.argv[2],port1,sys.argv[3],port2,buyer_OS)
+        
+        sharkutils.debug_find_mismatch_frames(file1,port1,not(args.b),file2,port2,not(args.s))
         exit() 
     if args.mode == 97:
-        port1 = shared.config.get("Buyer","buyer_proxy_port")
+        print "defunct for now"
+        exit()
+        '''port1 = shared.config.get("Buyer","buyer_proxy_port")
         port2 = shared.config.get("Seller","seller_proxy_port")
         sharkutils.debug_find_mismatch_frames_stream_filter(sys.argv[2],port1,sys.argv[3],port2)
-        exit()
+        exit()'''
+    #if args.mode 
         
     if args.mode == 1:
         print 'Level 1 dispute not yet implemented'
