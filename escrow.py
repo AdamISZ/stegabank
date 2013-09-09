@@ -177,27 +177,45 @@ if __name__ == "__main__":
     
     #detailed debug option    
     if args.mode == 2: 
-        #7 Sep 2013: for now, only implemented the buyer-seller version
-        if (args.b):
-            file1 = os.path.join(shared.config.get("Directories",\
-                                "escrow_base_dir"),args.runID,args.b)
-        else:
-            file1 = os.path.join(shared.config.get("Directories",\
-                                "escrow_base_dir"),args.runID,"stcp_buyer")
-        if (args.s):
-            file2 = os.path.join(shared.config.get("Directories",\
-                                "escrow_base_dir"),args.runID,args.s)
-        else:
-            file2 = os.path.join(shared.config.get("Directories",\
-                                "escrow_base_dir"),args.runID,"stcp_seller")
-            
-        port1 = shared.config.get("Buyer","buyer_proxy_port")
-        port2 = shared.config.get("Seller","seller_proxy_port")
         
-        sharkutils.debug_find_mismatch_frames(file1,port1,not(args.b),\
-                                              file2,port2,not(args.s))
-        exit() 
-    
+        #set stunnel key if appropriate
+        options = [sharkutils.get_stunnel_keystring()] if (args.r[0]=='e')\
+        else []
+        base = os.path.join(shared.config.get("Directories","escrow_base_dir"),args.runID)
+        
+        if (not args.r or args.r == 'bs'):
+            port1 = int(shared.config.get("Buyer","buyer_proxy_port"))
+            port2 = int(shared.config.get("Seller","seller_proxy_port"))
+            buyer = args.b if args.b else "stcp_buyer"
+            seller = args.s if args.s else "stcp_seller"
+            file1 = os.path.join(base,buyer)
+            file2 = os.path.join(base,seller)
+            sharkutils.debug_find_mismatch_frames(file1,port1,not(args.b),\
+                                file2,port2,not(args.s),options=options)
+        
+        elif (args.r == 'es'):
+            port1 = int(shared.config.get("Escrow","escrow_port"))
+            port2 = int(shared.config.get("Seller","seller_proxy_port"))
+            escrow = args.e if args.e else "stcp_escrow"
+            seller = args.s if args.s else "stcp_seller"
+            file1 = os.path.join(base,escrow)
+            file2 = os.path.join(base,seller)
+            sharkutils.debug_find_mismatch_frames(file1,port1,not(args.e),\
+                                file2,port2,not(args.s),options=options)
+            
+        elif (args.r == 'eb'):
+            port2 = int(shared.config.get("Buyer","buyer_proxy_port"))
+            port1 = int(shared.config.get("Escrow","escrow_port"))
+            escrow = args.e if args.e else "stcp_escrow"
+            seller = args.s if args.s else "stcp_buyer"
+            file1 = os.path.join(base,escrow)
+            file2 = os.path.join(base,seller)
+            sharkutils.debug_find_mismatch_frames(file1,port1,not(args.e),\
+                                file2,port2,not(args.b),options=options)
+        else:
+            print "error, incorrect role string passed to test_ssl_matching()"
+            exit()
+        
     print "unrecognised mode"
     exit()
 

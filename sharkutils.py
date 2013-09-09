@@ -308,7 +308,8 @@ def get_stunnel_keystring():
 #ssl hashes which can't be matched in the other capture, and giving a
 #stream-by-stream (if appropriate) and frame-by-frame breakdown of the
 #hashes found.
-def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, port2,stcp_flag2):
+def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, \
+                               port2,stcp_flag2,options=[]):
     data1 = [capfile1,port1,stcp_flag1]
     data2 = [capfile2,port2,stcp_flag2]
     
@@ -332,10 +333,10 @@ def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, port2,stcp_
                 shared.debug(1,["merged stcppipe filename is:",merged_stcp_file])
                 mergecap(merged_stcp_file,data[0],dir=True)
                 streams = debug_get_streams(merged_stcp_file, \
-                          'ssl.record.content_type==23 and tcp.port=='+data[1])
+                          'ssl.record.content_type==23 and tcp.port=='+str(data[1]))
                 for stream in streams:
                     comparison[data[0]][stream] = get_frames_hashes( \
-                    merged_stcp_file,port=data[1],stream=stream)
+                    merged_stcp_file,port=data[1],stream=stream,options=options)
                     shared.debug(3,["Here is comparison[",data[0],"]:",\
                                     stream,":",comparison[data[0]][stream] ])
             else:
@@ -350,13 +351,13 @@ def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, port2,stcp_
                                     "got stream number:",stream])
                     comparison[data[0]][stream]= \
                     get_all_ssl_hashes_from_capfile(capfile= \
-                    os.path.join(data[0],file),port=data[1])
+                    os.path.join(data[0],file),port=data[1],options=options)
         else: #means tshark was used but we still want per stream stuff
             streams = debug_get_streams(data[0], \
-                      'ssl.record.content_type==23 and tcp.port=='+data[1])
+                      'ssl.record.content_type==23 and tcp.port=='+str(data[1]))
             for stream in streams:
                 comparison[data[0]][stream] = get_frames_hashes(data[0],\
-                                              port=data[1],stream=stream)
+                                              port=data[1],stream=stream,options=options)
                 shared.debug(3,["Here is comparison[",data[0],"]:",\
                                     stream,":",comparison[data[0]][stream] ])
 
@@ -422,7 +423,7 @@ def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, port2,stcp_
 
 #designed to return a dict of all hashes per frame, optionally
 #filtered by stream
-def get_frames_hashes(capfile,port,stream=''):    
+def get_frames_hashes(capfile,port,stream='',options=[]):    
     frames_hashes = {}
     #Run tshark once to get a list of frames with ssl app data in them
     filterstr = 'ssl.record.content_type==23 and tcp.port=='+str(port)
@@ -430,7 +431,7 @@ def get_frames_hashes(capfile,port,stream=''):
         filterstr += (' and tcp.stream==' + stream)
     try:
         frames_str = tshark(capfile,field='frame.number', \
-                            filter= filterstr)
+                            filter= filterstr,options=options)
     except:
         print 'Exception in tshark'
         return -1
@@ -440,7 +441,8 @@ def get_frames_hashes(capfile,port,stream=''):
     for frame in ssl_frames:
         frames_hashes[frame]= [] #array will contain all hashes for that frame
     
-    app_data_str = tshark(capfile,field='ssl.app_data',frames=ssl_frames)
+    app_data_str = tshark(capfile,field='ssl.app_data',frames=ssl_frames, \
+                          options=options)
     app_data_output = shared.pisp(app_data_str)
     shared.debug(5,app_data_output)
     #now app_data_output is a list, each element of which is the complete
@@ -486,7 +488,7 @@ def debug_find_mismatch_frames_stream_filter(capfile1,port1,capfile2,port2):
 
 #8 Sep 2013 Note that this stream number calculation method
 # is NOT to be used with stcppipe_port (for that, the wireshark
-# logical distinction IPx2,portx2 is used for stream identification
+# logical distinction IPx2,portx2 is used for stream identification)
 def get_stream_from_stcp_filename(file):
     #filename format: <IP>.<port>-<IP>.<port>_<stream>.acp
     return re.findall('[a-zA-Z0-9]+',file)[-2]
