@@ -181,7 +181,8 @@ if __name__ == "__main__":
         #set stunnel key if appropriate
         options = [sharkutils.get_stunnel_keystring()] if (args.r[0]=='e')\
         else []
-        base = os.path.join(shared.config.get("Directories","escrow_base_dir"),args.runID)
+        base = os.path.join(shared.config.get("Directories","escrow_base_dir"),\
+                args.runID)
         
         if (not args.r or args.r == 'bs'):
             port1 = int(shared.config.get("Buyer","buyer_proxy_port"))
@@ -190,8 +191,8 @@ if __name__ == "__main__":
             seller = args.s if args.s else "stcp_seller"
             file1 = os.path.join(base,buyer)
             file2 = os.path.join(base,seller)
-            sharkutils.debug_find_mismatch_frames(file1,port1,not(args.b),\
-                                file2,port2,not(args.s),options=options)
+            stcp_flag1 = not(args.b)
+            stcp_flag2 = not(args.s)
         
         elif (args.r == 'es'):
             port1 = int(shared.config.get("Escrow","escrow_port"))
@@ -200,8 +201,8 @@ if __name__ == "__main__":
             seller = args.s if args.s else "stcp_seller"
             file1 = os.path.join(base,escrow)
             file2 = os.path.join(base,seller)
-            sharkutils.debug_find_mismatch_frames(file1,port1,not(args.e),\
-                                file2,port2,not(args.s),options=options)
+            stcp_flag1 = not(args.e)
+            stcp_flag2 = not(args.s)
             
         elif (args.r == 'eb'):
             port2 = int(shared.config.get("Buyer","buyer_proxy_port"))
@@ -210,12 +211,23 @@ if __name__ == "__main__":
             seller = args.s if args.s else "stcp_buyer"
             file1 = os.path.join(base,escrow)
             file2 = os.path.join(base,seller)
-            sharkutils.debug_find_mismatch_frames(file1,port1,not(args.e),\
-                                file2,port2,not(args.b),options=options)
+            stcp_flag1 = not(args.e)
+            stcp_flag2 = not(args.b)
         else:
             print "error, incorrect role string passed to test_ssl_matching()"
             exit()
         
+        sharkutils.debug_find_mismatch_frames(file1,port1,stcp_flag1,\
+                                file2,port2,stcp_flag2,options=options)
+        exit()
+    if args.mode==4:
+        capfile = args.e
+        print "converting file:",capfile
+        stream = args.runID
+        print "using stream number:",stream
+        sharkutils.convert_escrow_trace(capfile,stream)
+        print "done"
+        exit()
     print "unrecognised mode"
     exit()
 
