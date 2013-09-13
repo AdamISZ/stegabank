@@ -81,7 +81,7 @@ def test_ssl_matching(runID,buyer,seller,escrow,role_string):
         shared.debug(1, \
         ["We're about to call get hashes from capfile with file name: ",file1])
         hashes1 = sharkutils.get_all_ssl_hashes_from_capfile(file1,  \
-        port=port1,stcp_flag=False,options=options)
+        port=port1,stcp_flag=False,in_options=options)
     else:
         #construct location of stcppipe files
         dir_name = "stcp_buyer" if (role_string[0]=='b') else "stcp_escrow"
@@ -89,7 +89,7 @@ def test_ssl_matching(runID,buyer,seller,escrow,role_string):
         shared.config.get("Directories","escrow_base_dir"), \
         runID,dir_name)
         hashes1 = sharkutils.get_all_ssl_hashes_from_capfile(stcp_log_dir, \
-        port=port1,stcp_flag=True,options=options)
+        port=port1,stcp_flag=True,in_options=options)
     
     shared.debug(1,["Length of hashes1 is : ",len(hashes1)])
     
@@ -140,7 +140,7 @@ def test_ssl_matching(runID,buyer,seller,escrow,role_string):
                 if hash not in intersection:
                     print "This hash from seller was not found in buyer list: "\
                          + str(hash)
-            
+            print "The intersection has length: " + str(len(intersection))
             print "The ssl traffic in the capture file delivered by the seller \n \
                does not match that in the escrow capture file. The seller \n \
                has not provided a genuine capture file. "
@@ -168,6 +168,8 @@ if __name__ == "__main__":
                          trace file, NOT to be used with stcppipe")
     parser.add_argument('-r',help="enter one of \'bs\' (buyer-seller), \'es\' \
                 (escrow-seller) or \'eb\' (buyer-escrow). Default is \'bs\'")
+    parser.add_argument('-f',help="escrow frame list")
+    parser.add_argument('-g',help="seller frame list")
     args = parser.parse_args()
     
     #basic check: do the files match or not?
@@ -221,12 +223,48 @@ if __name__ == "__main__":
                                 file2,port2,stcp_flag2,options=options)
         exit()
     if args.mode==4:
-        capfile = args.e
+        capfile = os.path.join(shared.config.get("Directories",\
+                "escrow_base_dir"),args.runID,args.e)
         print "converting file:",capfile
-        stream = args.runID
-        print "using stream number:",stream
-        sharkutils.convert_escrow_trace(capfile,stream)
+        sharkutils.convert_escrow_trace(capfile)
         print "done"
+        exit()
+    if args.mode==5:
+        escrow = os.path.join(shared.config.get("Directories",\
+                "escrow_base_dir"),args.runID,args.e)
+        seller = os.path.join(shared.config.get("Directories", \
+                "escrow_base_dir"),args.runID,args.s)
+        escrow_frames = seller_frames = []
+        if (args.f): escrow_frames = args.f.split(',')
+        if (args.g): seller_frames = args.g.split(',')
+        seller_port = int(shared.config.get("Seller","seller_proxy_port"))
+        escrow_port = int(shared.config.get("Escrow","escrow_port"))
+        
+        #read in the boolean options to be tried from the config file
+        options=[]
+        optionvars=shared.config.get("SharkInternals","boolean_flags").split(',')
+        for var in optionvars: options.append(var)
+        
+        #also add options for tcp and ssl ports:
+        options.append('http.tcp.port:'+shared.config.get("SharkInternals","http.tcp.port_fixed")+','+shared.config.get("SharkInternals","http.tcp.port_var"))
+        options.append('http.ssl.port:'+shared.config.get("SharkInternals","http.ssl.port_fixed")+','+shared.config.get("SharkInternals","http.ssl.port_var"))
+        
+        hashes_escrow = sharkutils.get_all_hashes_from_escrow(escrow,\
+        port=escrow_port,frames=escrow_frames,in_options=options)
+        hashes_seller = sharkutils.get_ssl_hashes_from_capfile(seller,\
+        port=seller_port,frames=seller_frames)
+        
+        #write over the options for the basic run
+        #options = [sharkutils.get_stunnel_keystring()]
+        hashes_escrow2 = sharkutils.get_all_ssl_hashes_from_capfile(escrow,port=escrow_port,in_options=options)
+        
+        print len(set(hashes_escrow))
+        print len(set(hashes_escrow2))
+        full_escrow = list(set(hashes_escrow).union(set(hashes_escrow2)))
+        print len(set(full_escrow))
+        print len(set(hashes_seller))
+        print len(set(full_escrow).intersection(set(hashes_seller)))
+        
         exit()
     print "unrecognised mode"
     exit()

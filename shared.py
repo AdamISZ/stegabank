@@ -15,6 +15,8 @@ import subprocess
 
 config = ConfigParser.ConfigParser()
 OS = platform.system()
+PINL = '\r\n' if OS == 'Windows' else '\n'
+hexdigits = set('0123456789abcdefABCDEF')
 
 #platform independent strip and split text string output (e.g. from console)
 def pisp(x):
