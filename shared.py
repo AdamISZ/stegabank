@@ -6,13 +6,6 @@ import platform
 import ConfigParser
 import subprocess
 
-#instantiate globals before populating
-#them from config
-#==========================================
-
-
-#ssllog_installdir is the dir from which main.py is run
-
 config = ConfigParser.ConfigParser()
 OS = platform.system()
 PINL = '\r\n' if OS == 'Windows' else '\n'
@@ -20,15 +13,8 @@ hexdigits = set('0123456789abcdefABCDEF')
 
 #platform independent strip and split text string output (e.g. from console)
 def pisp(x):
-    #clean out whitespace if necessary
     x=x.rstrip()
-    if OS == 'Windows':
-        return x.split('\r\n')
-    elif OS == 'Linux':
-        return x.split('\n')
-    else:
-        debug(0,["Error in split function: OS not recognized. Quitting."])
-        exit()
+    return x.split(PINL)
 
 #elementary debug calls with different levels:
 def debug(level,message):

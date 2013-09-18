@@ -5,6 +5,9 @@ import os
 import platform
 import ConfigParser
 import shared
+#for brevity
+def g(x,y):
+    return shared.config.get(x,y)
 import subprocess
 import hashlib
 import shutil
@@ -45,7 +48,7 @@ def tshark(infile, field='', filter='', frames=[],options=[]):
 
 
 def tshark_inner(infile, field='', filter='', frames=[],options=[]):
-    tshark_exepath =  shared.config.get("Exepaths","tshark_exepath")
+    tshark_exepath =  g("Exepaths","tshark_exepath")
     args = [tshark_exepath,'-r',infile] 
     
     #this clunky structure is unfortunately necessary due to the vagaries
@@ -83,7 +86,7 @@ def tshark_inner(infile, field='', filter='', frames=[],options=[]):
 #to include rather than remove frames, filter
 #is used to generate a list of frame numbers to include
 def editcap(infile, outfile, reverse_flag = 0, filter='', frames=[]):
-    editcap_exepath =  shared.config.get("Exepaths","editcap_exepath")
+    editcap_exepath =  g("Exepaths","editcap_exepath")
     frame_list=[]
     if reverse_flag:
         args = [editcap_exepath, '-r', infile]
@@ -132,7 +135,7 @@ def editcap_inner(args,frames,outfile):
         shared.debug(2,["Calling editcap with these arguments: ",args])
         shared.debug(4,subprocess.check_output(args))
         #Lastly, need to concatenate and delete all the temporary files
-        args = [shared.config.get("Exepaths","mergecap_exepath"),'-w',outfile]
+        args = [g("Exepaths","mergecap_exepath"),'-w',outfile]
         args.extend(filenames)
         subprocess.check_output(args)
        
@@ -145,10 +148,11 @@ def editcap_inner(args,frames,outfile):
 #and a wildcard match is used to merge all files in that directory
 #if dir is False, then infiles must be a list of full paths to cap files
 def mergecap(outfile,infiles,dir=False):
-
-    outfile = shared.verify_file_creation(outfile, \
-                    "mergecap output already exists!",True)
-    args = [shared.config.get("Exepaths","mergecap_exepath")]
+    
+    #Modified 18 Sep 2013: no need to check for overwrite here maybe
+    #outfile = shared.verify_file_creation(outfile, \
+    #                "mergecap output already exists!",True)
+    args = [g("Exepaths","mergecap_exepath")]
     if (dir):
         #note that here 'infiles' will actually be the DIRECTORY
         args.extend(['-w',outfile, os.path.join(infiles,'*')])
@@ -209,15 +213,16 @@ def get_all_ssl_hashes_from_capfile(capfile, handshake= False, port= -1, \
             #Update 8 Sep 2013 updated stcppipe called stcppipe_port solves
             #problem by using client port so that merged file now has
             #separate streams. Can still use 'basic' stcppipe, but it will be slower
-            
-            if (re.findall('port',shared.config.get("Exepaths","stcppipe_exepath"))):
-                shared.debug(1,["stcppipe_port found; merging all streams from stcppipe for processing.."])
-                merged_stcp_file = os.path.join(capfile,"merged.pcap") #TODO: magic string?
-                shared.debug(1,["merged stcppipe filename is:",merged_stcp_file])
-                mergecap(merged_stcp_file,capfile,dir=True)
-                return get_ssl_hashes_from_capfile(capfile=merged_stcp_file,\
-                                                   port=port,options=options)
-            else:
+            #edited 17th Sept - we have abandoned 'non-port' stcppipe so always do 
+            #it the way in the 'if' block; the 'else' block is kept for future ref.
+            #if True:
+            shared.debug(1,["stcppipe_port found; merging all streams from stcppipe for processing.."])
+            merged_stcp_file = os.path.join(capfile,"merged.pcap") #TODO: magic string?
+            shared.debug(1,["merged stcppipe filename is:",merged_stcp_file])
+            mergecap(merged_stcp_file,capfile,dir=True)
+            return get_ssl_hashes_from_capfile(capfile=merged_stcp_file,\
+                                               port=port,options=options)
+            '''else:
                 #8 Sep 2013 
                 #if not using stcppipe_port, will still need to read hashes in from files
                 for each_file in os.listdir(capfile):
@@ -227,7 +232,7 @@ def get_all_ssl_hashes_from_capfile(capfile, handshake= False, port= -1, \
                                                             port=port,options=options)
                     if (stream_hashes):
                         shared.debug(1,["Got hashes:",stream_hashes])
-                        hashes.extend(stream_hashes)
+                        hashes.extend(stream_hashes)'''
                 
         else:
             hashes.extend(get_ssl_hashes_from_capfile(capfile=capfile,port=port,\
@@ -287,9 +292,9 @@ def get_stunnel_keystring(protocol='http'):
     #setting of key file: it cannot have backslashes so os.path.join()
     #does not work correctly with it (need forward slash instead)
     return  'ssl.keys_list:' + ','. \
-    join([shared.config.get("Escrow","escrow_host"), \
-    shared.config.get("Escrow","escrow_port"),protocol,os.path.join( \
-    shared.config.get("Directories","stunnel_key_location")+'/seller.key')])
+    join([g("Escrow","escrow_host"), \
+    g("Escrow","escrow_stcp_port"),protocol,os.path.join( \
+    g("Directories","stunnel_key_location")+'/seller.key')])
     
     
 #===============================================================================
@@ -316,7 +321,7 @@ def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, \
     
     for data in [data1,data2]:
         if (data[2]): #means stcppipe was used to collect data
-            if (re.findall('stcppipe_port',shared.config.get("Exepaths", \
+            if (re.findall('stcppipe_port',g("Exepaths", \
                                            "stcppipe_exepath"))):
                 #merge the files before populating the streams
                 shared.debug(1,["stcppipe_port found; merging all streams from \
