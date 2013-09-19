@@ -6,6 +6,7 @@
 
 #++LIBRARY IMPORTS+++++++++
 import sys
+import shutil
 import shared
 #for brevity
 def g(x,y):
@@ -25,7 +26,7 @@ buyer_ssh_command=[]
 seller_ssh_command=[]
 stcp_commands={}
 all_commands = []
-imacros_dir = "C:/Users/AdamISZ/Documents/iMacros/Macros/"
+imacros_dir = g("Directories","imacros_dir")
 #========================
 
 
@@ -104,14 +105,31 @@ def run_test(runID, websites_to_visit):
     # is ready now: start firefox, pass it a list of websites to visit
     #separated by some sleep
     print "Now transferring to firefox...\n"
-    os.system('start /B /D \"'+os.path.dirname(g("Exepaths","firefox_exepath"))+\
-    '\" '+os.path.basename(g("Exepaths","firefox_exepath")))
+    #this, at least, will need to be changed for Linux.
+    if (shared.OS == 'Windows'):
+        os.system('start /B /D \"'+os.path.dirname(g("Exepaths","firefox_exepath"))+\
+        '\" '+os.path.basename(g("Exepaths","firefox_exepath")))
+    elif (shared.OS == 'Linux'):
+        #a first attempt at a Linux version??TODO
+        os.system(g("Exepaths","firefox_exepath")+ '&') 
+    else:
+        print "Unrecognized OS"
+        exit(1)
     
     #This delay was incorporated as per the instructions at the iMacros wiki;
     #it's needed because Firefox must load the add-on completely before we
     #make the call to our individual macro
+    #TODO Is this tool even available for Linux??
     time.sleep(15) 
-    os.system('\"'+g("Exepaths","firefox_exepath")+'\" imacros://run/?m='+runID+'.iim')
+    if (shared.OS=='Windows'):
+        os.system('\"'+g("Exepaths","firefox_exepath")+\
+                    '\" imacros://run/?m='+runID+'.iim')
+    elif (shared.OS=='Linux'):
+        os.system(g("Exepaths","firefox_exepath")+\
+                    ' imacros://run/?m='+runID+'.iim')
+    else:
+        print "OS not recognized."
+        exit(1)
     
     #wait for imacro to signal us finished
     while not os.path.isfile('iSignal.txt'):
@@ -123,11 +141,13 @@ def run_test(runID, websites_to_visit):
     
     
 def cleanup():
-    #once we've finished all the runs
+    #once we've finished the run
     #we'll want to shutdown all stcppipes and POSSIBLY ssh
     #this will kill everything on the local machine
     killtree(os.getpid(),including_parent=False)
     #we still need to kill the remote stcppipe
+    
+    #For remote host on Linux
     remote_command('pkill -SIGTERM stcppipe')
     
     #unfortunately firefox is not in our tree, will have to hunt it down!
@@ -167,9 +187,15 @@ if __name__ == "__main__":
     #define where the run data from stcppipe is going to be stored
     #by using the unique runID which called this script
     runID = sys.argv[1]
+    if runID =='testdatagenerator.py': runID =sys.argv[2]
     if not runID:
         print "runID was not found. Quitting.\n"
         exit()
+    
+    #remove pre-existing ssl key file so we only load the keys for this run
+    key_file=g("Directories","ssl_keylog_file")
+    shared.silentremove(key_file)
+    
     #read the websites from the filename:
     website_list=[]
     with open(os.path.join(g("Directories",\
@@ -221,7 +247,9 @@ if __name__ == "__main__":
     for agent,dir in run_dir_base.iteritems():
         if (agent=='escrow'):
             #Left here as a working string, just in case something breaks in future
-            #stcp_commands[agent]=[g("Exepaths","sshpass_exepath")+' escrowbuyer@109.169.23.122 -P 227 -pw NnFtIsSlA1228 \"stcppipe -d autotest1/stcp_escrow -b 127.0.0.1 12347 12346 > /dev/null 2>&1 &\"']
+            #stcp_commands[agent]=[g("Exepaths","sshpass_exepath")+\
+            #' escrowbuyer@109.169.23.122 -P 227 -pw NnFtIsSlA1228 \
+            #"stcppipe -d autotest1/stcp_escrow -b 127.0.0.1 12347 12346 > /dev/null 2>&1 &\"']
             stcp_commands[agent]=[g("Exepaths","sshpass_exepath")+' '\
             +g("Buyer","buyer_ssh_user")+'@'+g("Escrow","escrow_host")+' -P '\
             +g("Escrow","escrow_ssh_port")+' -pw '+g("Buyer","buyer_ssh_pass")+\
@@ -252,17 +280,19 @@ if __name__ == "__main__":
     #to check for hash mismatches. All the results are dumped to stdout, which
     #can then be parsed by a wrapper script (and saved to file as appropriate)
     error_in_hash_matching=False
-    for role_string in ['bs','eb','es']:
+    for role_string in ['xx']:
         command_str = 'escrow.py -r '+role_string+' 1 '+runID
         print "Starting analysis script:",command_str
         if os.system(command_str) != 0:
             error_in_hash_matching = True
-        #clean out the merged file in case it interferes with the next run
-        for char in role_string:
-            if char=='b': os.remove(os.path.join(stcp_buyer_dir,"merged.pcap"))
-            elif char=='s': os.remove(os.path.join(stcp_seller_dir,"merged.pcap"))
-            else: os.remove(os.path.join(stcp_escrow_dir,"merged.pcap"))
-        
+    
+    #copy the premaster secrets file into the testing directory
+    shutil.copy2(key_file,os.path.join(run_dir_base['buyer'],runID,runID+'.keys'))
+    #keep a local copy of the definition of this test run
+    shutil.copy2(os.path.join(g("Directories","testing_web_list_dir"),runID),\
+    os.path.join(run_dir_base['buyer'],runID,runID))
+    
+    #All processing over; only need to make sure stdout is recorded somewhere!
     print "Test run: ", runID," is complete."
     if error_in_hash_matching: exit(1)
     else: exit(0)
