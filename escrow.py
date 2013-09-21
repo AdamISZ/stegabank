@@ -66,11 +66,6 @@ import argparse
 #use escrow.py 2 (debug facility)
 def test_ssl_matching(runID,buyer,seller,escrow,role_string):
     
-    #make sure to have stunnel key loaded if appropriate
-    #18 Sep 2013 removed as stunnel not in use for now
-    #options = [sharkutils.get_stunnel_keystring()] if (role_string[0]=='e') else []
-    #shared.debug(1,["Options to tshark were defined as: ",options])
-    
     options=[]
     ports = {}
     stcp_hashes = {}
@@ -166,22 +161,6 @@ def test_ssl_matching(runID,buyer,seller,escrow,role_string):
     
     shared.debug(1,["Length of hashes2 is : ",len(hashes2)])
     
-       
-    #18 Sep 2013: without stunnel, we don't need to use subset so this if
-    #block is redundant as of now.
-    #if (role_string[0] == 'e'):
-    #    if (set(hashes2).issubset(set(hashes1))):
-    #        print "The seller's capture file matches the escrow's capture file; \
-    #               \n The buyer's ssl keys must be faulty."
-    #        exit()
-    #    else:
-    #        print "The ssl traffic in the seller's capture file does not match \
-    #               \n that in the escrow capture file. The seller has not \
-    #                   \n provided a genuine capture file."
-    #        intersection = [val for val in hashes2 if val in hashes1]
-    #        print "The intersection has length: " + str(len(intersection))
-    #        exit()
-    #else:
     if set(hashes1) ==set(hashes2): 
         print "The capture files match perfectly (all hashes identical)!"
     
@@ -236,10 +215,7 @@ if __name__ == "__main__":
     
     #detailed debug option    
     if args.mode == 2: 
-        
-        #set stunnel key if appropriate
-        options = [sharkutils.get_stunnel_keystring()] if (args.r[0]=='e')\
-        else []
+        options=[]
         base = os.path.join(shared.config.get("Directories","escrow_base_dir"),\
                 args.runID)
         

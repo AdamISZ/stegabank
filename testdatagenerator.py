@@ -26,9 +26,7 @@ buyer_ssh_command=[]
 seller_ssh_command=[]
 stcp_commands={}
 all_commands = []
-imacros_dir = g("Directories","imacros_dir")
 #========================
-
 
 #excellent tool based on module psutil;
 #will kill all processes in the tree (which on Windows is otherwise impossible)
@@ -39,20 +37,10 @@ def killtree(pid, including_parent=True):
     if including_parent:
         parent.kill()
 
-
-#this is the basic macro format:
-#VERSION BUILD=8510617 RECORDER=FX
-#SET !REPLAYSPEED SLOW
-#TAB T=1
-#URL GOTO=https://bitcointalk.org/index.php?topic=295926.0
-#WAIT SECONDS=5
-#URL GOTO=http://news.bbc.co.uk/
-#SET !EXTRACT done
-#SAVEAS TYPE=EXTRACT FOLDER=C:\ssllog-master FILE=iSignal.txt
 def make_imacro(websites,runID):
     
-    macro_file = shared.verify_file_creation(imacros_dir+runID+'.iim',\
-                                             "Macro file exists")
+    macro_file = shared.verify_file_creation(os.path.join(imacros_dir,runID+'.iim'),\
+                        "Macro file exists",overwrite=True,prompt=False,remove_in_advance=False)
     macro_file_handle = open(macro_file,'w')
     
     #build the lines for the file, starting with header lines
@@ -62,7 +50,7 @@ def make_imacro(websites,runID):
     for website in websites:
         shared.debug(1,["writing this website to the macro: ",website])
         file_contents.append('URL GOTO='+website)
-        file_contents.append('WAIT SECONDS=5')
+        file_contents.append('WAIT SECONDS=25')
     
     #now append footer
     file_contents.extend(['SET !EXTRACT done',\
@@ -75,18 +63,10 @@ def make_imacro(websites,runID):
 #which we get by using the multiprocessing (threading implemented at process
 # level) module
 def run_process(command):
-    for a in command:
-        #A mind bogglingly ugly hack; TODO choose which way to call on a flag
-        if 'stcp_escrow' in a:
-            command_str = ''.join(command)
-            os.system(command_str)
-    command_str = ' '.join(command) + ' > NUL 2>&1'
-    os.system(command_str)
-    #stcppipes never return, but ssh does; just lose it
-    exit()
+    shared.local_command(command,bg=True)
         
 
-def run_test(runID, websites_to_visit):
+def run_test(runID, websites_to_visit,auto=True):
     
     #create a macro to be called for this run:
     make_imacro(websites_to_visit,runID)
@@ -105,88 +85,70 @@ def run_test(runID, websites_to_visit):
     # is ready now: start firefox, pass it a list of websites to visit
     #separated by some sleep
     print "Now transferring to firefox...\n"
-    #this, at least, will need to be changed for Linux.
-    if (shared.OS == 'Windows'):
-        os.system('start /B /D \"'+os.path.dirname(g("Exepaths","firefox_exepath"))+\
-        '\" '+os.path.basename(g("Exepaths","firefox_exepath")))
-    elif (shared.OS == 'Linux'):
-        #a first attempt at a Linux version??TODO
-        os.system(g("Exepaths","firefox_exepath")+ '&') 
+    ffdir = os.path.dirname(g("Exepaths","firefox_exepath"))
+    ffname = os.path.basename(g("Exepaths","firefox_exepath"))
+    shared.local_command([g("Exepaths","firefox_exepath")],bg=True)
+    
+    if (auto):
+        #This delay was incorporated as per the instructions at the iMacros wiki;
+        #it's needed because Firefox must load the add-on completely before we
+        #make the call to our individual macro
+        time.sleep(15) 
+        
+        shared.local_command([g("Exepaths","firefox_exepath"),\
+                              'imacros://run/?m='+runID+'.iim'],bg=True)
+
+        #wait for imacro to signal us finished
+        while not os.path.isfile('iSignal.txt'):
+            time.sleep(1)
+        #got the signal so remove the signal file
+        os.remove('iSignal.txt')
+        
+        print "Firefox macro finished for run:",runID
     else:
-        print "Unrecognized OS"
-        exit(1)
-    
-    #This delay was incorporated as per the instructions at the iMacros wiki;
-    #it's needed because Firefox must load the add-on completely before we
-    #make the call to our individual macro
-    #TODO Is this tool even available for Linux??
-    time.sleep(15) 
-    if (shared.OS=='Windows'):
-        os.system('\"'+g("Exepaths","firefox_exepath")+\
-                    '\" imacros://run/?m='+runID+'.iim')
-    elif (shared.OS=='Linux'):
-        os.system(g("Exepaths","firefox_exepath")+\
-                    ' imacros://run/?m='+runID+'.iim')
-    else:
-        print "OS not recognized."
-        exit(1)
-    
-    #wait for imacro to signal us finished
-    while not os.path.isfile('iSignal.txt'):
-        time.sleep(1)
-    #got the signal so remove the signal file
-    os.remove('iSignal.txt')
-    
-    print "Firefox macro finished for run:",runID
+        #here the user will do the work and we wait for firefox to close
+        
+        while True:
+            ff_found=False
+            for proc in psutil.process_iter():
+                if 'firefox' in proc.name:
+                    ff_found = True
+                    time.sleep(1)
+            if not ff_found: break
+        
     
     
 def cleanup():
     #once we've finished the run
-    #we'll want to shutdown all stcppipes and POSSIBLY ssh
-    #this will kill everything on the local machine
+    #we'll want to shutdown all stcppipes and ssh
     killtree(os.getpid(),including_parent=False)
     #we still need to kill the remote stcppipe
+    shared.remote_escrow_command('pkill -SIGTERM stcppipe')
     
-    #For remote host on Linux
-    remote_command('pkill -SIGTERM stcppipe')
-    
+    #TODO: shutdown is a total mess but I don't want to spend
+    #days and days finding the right methods
     #unfortunately firefox is not in our tree, will have to hunt it down!
-    ff_killed=False
     for proc in psutil.process_iter():
         if 'firefox' in proc.name:
             proc.kill()
-            ff_killed=True
-    
-    if not ff_killed: print "Failed to kill firefox"
+        if 'plink' in proc.name:
+            proc.kill()
+        if 'stcppipe' in proc.name:
+            proc.kill()        
     
     #allow a little time for OS cleanup
     time.sleep(2)
-    
     print "infrastructure for tests is now shut down.\n"
-
-#run a shell command on the remote escrow server.
-def remote_command(command):
-    os.system(g("Exepaths","sshpass_exepath")+' '\
-                +g("Buyer","buyer_ssh_user")+'@'+g("Escrow","escrow_host")+' -P '\
-                +g("Escrow","escrow_ssh_port")+' -pw '+g("Buyer","buyer_ssh_pass")\
-                +' \"'+command+'\"')
-
-#copy all files from remote_dir on the remote (escrow) server to the local_dir
-#directory on the local machine
-def get_remote_files(remote_dir,local_dir):
-    os.system('\"'+g("Exepaths","scp_exepath")+'\" -P '\
-    +g("Escrow","escrow_ssh_port")+' -pw '+g("Buyer","buyer_ssh_pass")+\
-    ' -unsafe '+g("Buyer","buyer_ssh_user")+'@'+g("Escrow","escrow_host")+':'+\
-    remote_dir+'/* '+local_dir+'/.')
     
 if __name__ == "__main__":
     
     #we need config file loaded
     helper_startup.loadconfig()
-    
+    imacros_dir = g("Directories","imacros_dir")
     #define where the run data from stcppipe is going to be stored
     #by using the unique runID which called this script
     runID = sys.argv[1]
+    auto = True if sys.argv[2]=='auto' else False
     if runID =='testdatagenerator.py': runID =sys.argv[2]
     if not runID:
         print "runID was not found. Quitting.\n"
@@ -202,37 +164,33 @@ if __name__ == "__main__":
         "testing_web_list_dir"),runID)) as f:
         website_list=filter(None,f.read().splitlines())
     
-    
     #make the directories to store the log files
-     #logged data will be stored here on the buyer,escrow, and seller
-    #(note that the escrow is on a remote host, in this case Linux)
+    #logged data will be stored here on the buyer,escrow, and seller
     run_dir_base = {'buyer':g("Directories","buyer_base_dir"),\
                     'seller':g("Directories","seller_base_dir"),\
                     'escrow':g("Directories","escrow_base_dir")}
     #set up the directory structure for the escrow on the remote host
-    remote_command('mkdir '+runID+'; cd '+runID+'; mkdir stcp_escrow')
+    shared.remote_escrow_command('mkdir '+runID+'; cd '+runID+'; mkdir stcp_escrow')
     new_dir = os.path.join(run_dir_base['buyer'],runID)
     if not os.path.exists(new_dir): os.makedirs(new_dir)
     #Note: in some future test scenario, where buyer and seller
     #have different basedirs, might need to add a line for seller here.
     #Now set up the stcp log directories:
-    stcp_buyer_dir = os.path.join(new_dir,'stcp_buyer')
-    if not os.path.exists(stcp_buyer_dir): os.makedirs(stcp_buyer_dir)
-    stcp_seller_dir = os.path.join(new_dir,'stcp_seller')
-    if not os.path.exists(stcp_seller_dir): os.makedirs(stcp_seller_dir)
-    stcp_escrow_dir = os.path.join(new_dir,'stcp_escrow')
-    if not os.path.exists(stcp_escrow_dir): os.makedirs(stcp_escrow_dir)
+    for dirname in ['stcp_buyer','stcp_seller','stcp_escrow']:
+        if not os.path.exists(os.path.join(new_dir,dirname)): 
+            os.makedirs(os.path.join(new_dir,dirname))
     
-    #We use data defined in the config file to build the list
-    #of commands for network setup
-    #build ssh commands
-    #first ssh is local port forwarding for buyer
+    #We use data defined in the config file to build the buyer and seller
+    #port forwarding commands.
+    #note that these are special, LOCAL HOST commands to set up a network
+    #connection so remote_escrow_command is not the right tool
+    #Also note: -N is a useful flag that doesn't instantiate a shell
     buyer_ssh_command = [g("Exepaths","sshpass_exepath"), g("Buyer","buyer_ssh_user") \
     +'@'+g("Escrow","escrow_host"),'-P', g("Escrow","escrow_ssh_port"), '-pw', \
     g("Buyer","buyer_ssh_pass"),'-N','-L', g("Buyer","buyer_stcp_port")+':127.0.0.1:'+\
     g("Escrow","escrow_input_port")]
     all_commands.append(buyer_ssh_command)
-    #second ssh is remote port forwarding for seller
+    
     seller_ssh_command = [g("Exepaths","sshpass_exepath"), g("Seller","seller_ssh_user") \
     +'@'+g("Escrow","escrow_host"),'-P', g("Escrow","escrow_ssh_port"), '-pw', \
     g("Seller","seller_ssh_pass"),'-N','-R', g("Escrow","escrow_host")+':'\
@@ -246,16 +204,12 @@ if __name__ == "__main__":
     #for each test
     for agent,dir in run_dir_base.iteritems():
         if (agent=='escrow'):
-            #Left here as a working string, just in case something breaks in future
-            #stcp_commands[agent]=[g("Exepaths","sshpass_exepath")+\
-            #' escrowbuyer@109.169.23.122 -P 227 -pw NnFtIsSlA1228 \
-            #"stcppipe -d autotest1/stcp_escrow -b 127.0.0.1 12347 12346 > /dev/null 2>&1 &\"']
-            stcp_commands[agent]=[g("Exepaths","sshpass_exepath")+' '\
-            +g("Buyer","buyer_ssh_user")+'@'+g("Escrow","escrow_host")+' -P '\
-            +g("Escrow","escrow_ssh_port")+' -pw '+g("Buyer","buyer_ssh_pass")+\
-            ' \"stcppipe -d '+runID+'/stcp_escrow -b 127.0.0.1 ' + \
+            stcp_commands[agent]=[g("Exepaths","sshpass_exepath"),\
+            g("Buyer","buyer_ssh_user")+'@'+g("Escrow","escrow_host"),'-P',\
+            g("Escrow","escrow_ssh_port"),'-pw',g("Buyer","buyer_ssh_pass"),\
+            'stcppipe -d '+runID+'/stcp_escrow -b 127.0.0.1 ' + \
             g(agent.title(),agent+"_stcp_port")+' ' + \
-            g(agent.title(),agent+"_input_port")+ ' > /dev/null 2>&1 &\"']
+            g(agent.title(),agent+"_input_port")+ ' > /dev/null 2>&1 &']
             all_commands.append(stcp_commands[agent])
         else:
             stcp_commands[agent]=[g("Exepaths","stcppipe_exepath"),'-d',\
@@ -266,15 +220,16 @@ if __name__ == "__main__":
     
 
     #all is ready; start test
-    run_test(runID,website_list)
+    run_test(runID,website_list,auto=auto)
     
-    #now time to gracefully shut down the pipes and the browser
+    #now time to gracefully shut down the network arch
     cleanup()
     
     #having run the tests, we need to copy the log files from the
     #remote host to the local host in advance of escrow.py testing
     #Can be achieved using scp
-    get_remote_files(runID+'/stcp_escrow',stcp_escrow_dir)
+    shared.get_remote_files(runID+'/stcp_escrow',\
+            os.path.join(run_dir_base['buyer'],runID,'stcp_escrow'))
     
     #we have all data in stcp_buyer,seller,escrow; we can run the escrow script
     #to check for hash mismatches. All the results are dumped to stdout, which

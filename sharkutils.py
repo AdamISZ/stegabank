@@ -150,8 +150,9 @@ def editcap_inner(args,frames,outfile):
 def mergecap(outfile,infiles,dir=False):
     
     #Modified 18 Sep 2013: no need to check for overwrite here maybe
-    #outfile = shared.verify_file_creation(outfile, \
-    #                "mergecap output already exists!",True)
+    outfile = shared.verify_file_creation(outfile, \
+                    "mergecap output already exists!",\
+                        overwrite=True,prompt=False,remove_in_advance=True)
     args = [g("Exepaths","mergecap_exepath")]
     if (dir):
         #note that here 'infiles' will actually be the DIRECTORY
@@ -285,18 +286,6 @@ def get_ssl_hashes_from_capfile(capfile,port=-1,stream='',options=[],frames=[]):
     
     return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
     
-def get_stunnel_keystring(protocol='http'):
-    #note that we do not include '-o' as tshark() handles that
-    #note that seller.key is a magic string (TODO?)
-    #9 Sep 2013: there is something like a bug in tshark command line
-    #setting of key file: it cannot have backslashes so os.path.join()
-    #does not work correctly with it (need forward slash instead)
-    return  'ssl.keys_list:' + ','. \
-    join([g("Escrow","escrow_host"), \
-    g("Escrow","escrow_stcp_port"),protocol,os.path.join( \
-    g("Directories","stunnel_key_location")+'/seller.key')])
-    
-    
 #===============================================================================
 #Functions for debugging purposes
 #===============================================================================
@@ -309,7 +298,8 @@ def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, \
                                port2,stcp_flag2,options=[]):
     data1 = [capfile1,port1,stcp_flag1]
     data2 = [capfile2,port2,stcp_flag2]
-    
+    print "stcp flag 1 is: ",stcp_flag1,"\n"
+    print "stcp flag 2 is: ",stcp_flag2,"\n"
     #first task is to construct
     #a dict of dicts of dicts of form:
     #{file2:{stream:{frame:hash}}}
@@ -321,8 +311,7 @@ def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, \
     
     for data in [data1,data2]:
         if (data[2]): #means stcppipe was used to collect data
-            if (re.findall('stcppipe_port',g("Exepaths", \
-                                           "stcppipe_exepath"))):
+            if (g("stcppipe","port")=='1'):
                 #merge the files before populating the streams
                 shared.debug(1,["stcppipe_port found; merging all streams from \
                 stcppipe for processing.."])
@@ -338,7 +327,9 @@ def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, \
                     shared.debug(3,["Here is comparison[",data[0],"]:",\
                                     stream,":",comparison[data[0]][stream] ])
             else:
-                for file in os.listdir(data[0]):
+                print "Error! stcppipe is always port type now.\n"
+                exit(1)
+                '''for file in os.listdir(data[0]):
                     #note here that files map one to one with streams
                     #counter-intuitively we need to call get_all_ssl... WITHOUT
                     #the stcp flag, because we need separate hash lists per stream
@@ -349,7 +340,7 @@ def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, \
                                     "got stream number:",stream])
                     comparison[data[0]][stream]= \
                     get_all_ssl_hashes_from_capfile(capfile= \
-                    os.path.join(data[0],file),port=data[1],options=options)
+                    os.path.join(data[0],file),port=data[1],in_options=options)'''
         else: #means tshark was used but we still want per stream stuff
             streams = debug_get_streams(data[0], \
                       'ssl.record.content_type==23 and tcp.port=='+str(data[1])\
@@ -479,18 +470,7 @@ def debug_get_streams(capfile,filterstr='',options=[]):
     shared.debug(2,["This is the list of tcp streams: ", streams])
     return streams
 
-#8 Sep 2013 Note that this stream number calculation method
-# is NOT to be used with stcppipe_port (for that, the wireshark
-# logical distinction IPx2,portx2 is used for stream identification)
-def get_stream_from_stcp_filename(file):
-    #filename format: <IP>.<port>-<IP>.<port>_<stream>.acp
-    return re.findall('[a-zA-Z0-9]+',file)[-2]
-
-
-
-
 mfile = ''
-
 #Look up libpcap file format for more detail
 def write_pkt(data, dest):
     global mfile
@@ -530,154 +510,6 @@ def write_pkt(data, dest):
     mfile.write(pkt_hdr + eth_hdr + ip_hdr + tcp_hdr +data)
     mfile.flush()
     
-   
-def convert_escrow_trace(capfile):
-    streams = debug_get_streams(capfile=capfile,options=[get_stunnel_keystring()])
-    filelist=[]
-    base = os.path.dirname(capfile)
-    for stream in streams:
-        filelist.append(convert_escrow_trace_stream(capfile,stream))
-    mergecap(os.path.join(base,"converted_escrow.pcap"),filelist)
-    
-        
-def convert_escrow_trace_stream(capfile,stream):
-    global mfile
-    global_hdr = "\xa1\xb2\xc3\xd4" + "\x00\x02" + "\x00\x04" + \
-    "\x00\x00\x00\x00" + "\x00\x00\x00\x00" + "\x00\x00\xff\xff" + \
-    "\x00\x00\x00\x01"
-    mfile_name = os.path.join(os.path.dirname(capfile),\
-                "converted_escrow_"+stream+".pcap")
-    mfile = open(mfile_name, 'wb') #magic string
-    mfile.write(global_hdr)
-    
-    filter_str = 'ssl.app_data and tcp.stream=='+stream+\
-    ' and not http.request and not http.response'
-    options=[get_stunnel_keystring()]
-    output = tshark(capfile,filter=filter_str,options=options)
-    lines = shared.pisp(output)
-    frames = []
-    
-    for line in lines:
-        #if line.count('SSL segment of a reassembled PDU') == 0 and line != '':
-        if line != '':
-            frames.append(line.split()[0])
-    
-    output = tshark(capfile,field='tcp.dstport',filter=filter_str,options=options)        
-    lines = shared.pisp(output)
-    dest_list = []
-    dest1 = lines[0]
-    
-    for line in lines:
-        if line == dest1:
-            dest_list.append(1)
-        else:
-            dest_list.append(0)
-    
-    print 'Need to extract SSL from ',str(len(frames)),' frames'
-    for index, frame in enumerate(frames):
-        print ('Processing frame '+str(index))
-        ascii_dump = tshark(capfile,frames=[frame],options=options,field='x')
-        binary_data = bytearray()
-        offset = ascii_dump.rfind('Reassembled SSL')
-        if offset == -1:
-            offset = ascii_dump.rfind('Decrypted SSL data')
-            if offset == -1:
-                print ("Couldn't find SSL in frame "+frame)
-                break
-        for line in ascii_dump[offset:].split('\n')[1:]:
-            #convert ascii representation of hex into binary 
-            #so long as first 4 chars are hexdigits
-            if all(c in shared.hexdigits for c in line [:4]):
-                m_array = bytearray.fromhex(line[6:54])
-                binary_data += m_array
-            else:
-                break
-        #write binary data into a new frame
-        write_pkt(binary_data, dest_list[index])
-    mfile.close()
-    return mfile_name
-
-
-#purpose is to return a list of items
-#each of which is the complete binary data in the DECRYPTED
-#SSL data generated by the -x flag in the escrow trace file.
-#This data MAY or MAY NOT itself be SSL; gathering all of it
-#should allow a foolproof match with corresponding SSL data
-#from buyer/seller
-def get_ssl_bytes_from_escrow_asciidump(ascii_dump):
-    
-    binary_data = []
-    ascii_array_pair = [ascii_dump.split('Decrypted SSL data'),\
-                        ascii_dump.split('Reassembled SSL')]
-    #heavy duty stuff here, be careful
-    shared.debug(5,["About to extract data from this ascii:\n",ascii_array_pair])
-    
-    for ascii_array in ascii_array_pair:
-        if len(ascii_array)<2:
-            shared.debug(0,["No SSL in ascii dump.\n"])
-            break
-   
-        for ascii_chunk in ascii_array[1:]:
-            binary_data_chunk = bytearray()
-            for line in ascii_chunk.split('\n')[1:]:
-                #convert ascii representation of hex into binary 
-                #so long as first 4 chars are hexdigits
-                if all(c in shared.hexdigits for c in line [:4]):
-                    m_array = bytearray.fromhex(line[6:54])
-                    binary_data_chunk += m_array
-                else:
-                    break
-            #v important to note that -x output includes a 5 byte SSL header
-            #but ssl.app_data does not - hence the 5: here
-            binary_data.append(binary_data_chunk[5:])
-        
-    return binary_data
-            
-#this function will extract a list of hashes of whatever binary
-#data has been decrypted with the stunnel key from the escrow trace
-def get_all_hashes_from_escrow(capfile,port=-1,in_options=[],stream='',frames=[]):
-    hashes = []
-    for baseoption in ['ssl','http']:
-        options_permutations_list = build_option_list(in_options=in_options,base=baseoption)
-            
-        #now loop through all possible combinations of options provided
-        for opts in options_permutations_list:
-            #set the basic filter string to pass to tshark for all runs
-            filterstr = build_filterstr(stream=stream,port=port)
-            if (frames): # means the caller told us which frames to analyze
-                ssl_frames = frames
-            else: #we'll get the frames using the filter string
-                frames_str=''
-                try:
-                    frames_str = tshark(capfile,field='frame.number', \
-                                filter= filterstr,options=opts)
-                except:
-                    #this could be caused by a corrupt file from stcppipe
-                    #or by a malformed query string,etc. - but in the former
-                    #case we should NOT exit, hence this approach
-                    shared.debug(0,["tshark failed - see stderr for message"])
-                    shared.debug(0,["return code from tshark: ",frames_str])
-                    return None
-        
-                ssl_frames = shared.pisp(frames_str)
-            
-            #gracefully handle null result (i.e. blank tshark output):
-            ssl_frames = filter(None,ssl_frames)
-            shared.debug(3,["ssl frames to be checked: ",ssl_frames])
-            if not ssl_frames:
-                return None
-        
-            output = tshark(capfile,field='x',filter=filterstr,\
-                            frames=ssl_frames,options=opts)
-            shared.debug(4,[output])
-            binary_data_list=get_ssl_bytes_from_escrow_asciidump(output)
-            for data in binary_data_list:
-                if (data): hashes.append(hashlib.md5(data).hexdigest())
-            #shared.debug(0,["Binary output:",binary_data_list])
-            #binary_data_list=list(set(filter(None,binary_data_list)))
-        
-    return hashes
-
 def build_filterstr(stream='',port=-1):
     filterstr = 'ssl.record.content_type==23'
     if (port > 0):
@@ -699,16 +531,14 @@ def build_option_list(in_options=[], base='http'):
             else:
                 option_boolean_lists.append([option+':True',option+':False'])
         option_all_lists = list(itertools.product(*option_boolean_lists))
-        print option_all_lists
+        shared.debug(3,option_all_lists)
     else:
        option_all_lists=[]
        
-    #first include just the bare option (only stunnel)
-    options_permutations_list = [[get_stunnel_keystring(base)]]
+    options_permutations_list = []
     
     for option_list in option_all_lists:
         option_list_tmp = filter(None,list(option_list))
-        option_list_tmp.append(get_stunnel_keystring())
         options_permutations_list.append(option_list_tmp)
     
     return options_permutations_list
