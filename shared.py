@@ -8,6 +8,7 @@ import ConfigParser
 import subprocess
 import re
 import helper_startup
+import psutil
 
 config = ConfigParser.ConfigParser()
 helper_startup.loadconfig()
@@ -15,6 +16,16 @@ OS = platform.system()
 PINL = '\r\n' if OS == 'Windows' else '\n'
 hexdigits = set('0123456789abcdefABCDEF')
 
+
+def wait_for_process_death(pname):
+    while True:
+        ff_found=False
+        for proc in psutil.process_iter():
+            if 'firefox' in proc.name:
+                ff_found = True
+                time.sleep(1)
+        if not ff_found: break
+            
 #call a command on the remote escrow - intended to be platform independent,
 #allow background or foreground execution, redirect to a file on remote server
 def remote_escrow_command(command,redirect='',bg=False):
@@ -37,14 +48,23 @@ def remote_escrow_command(command,redirect='',bg=False):
    
 #copy all files from remote_dir on the remote (escrow) server to the local_dir
 #directory on the local machine
-def get_remote_files(remote_dir,local_dir):
-    login = get_login('buyer') #todo: should be just agent, not one of buy/sell
+def get_remote_files(remote_files,local_dir,login,agent,dir=True):
+    login = agent.activeEscrow.getLogin() 
     params = [config.get("Exepaths","scp_exepath"), '-P',\
-    config.get("Escrow","escrow_ssh_port"),'-pw',login[2],'-unsafe',\
-    login[0]+'@'+login[1]+':'+remote_dir+'/*',local_dir+'/.']
-    
+    login[3],'-pw',login[2],'-unsafe']
+    remote = remote_files+'/*' if dir else remote_files
+    params.extend([login[1]+'@'+login[2]+':'+remote,local_dir+'/.']
     print subprocess.check_output(params)
 
+def send_files_remote(remote_dir,local_files,login,agent,dir=True):
+    login = agent.activeEscrow.getLogin() 
+    params = [config.get("Exepaths","scp_exepath"), '-P',\
+    login[3],'-pw',login[2],'-unsafe']
+    local = local_files+'/*' if dir else local_dir
+    params.extend([local,login[1]+'@'+login[2]+':'+remote_dir+'/.']
+    print subprocess.check_output(params)
+    
+    print subprocess.check_output(params)
 #note: local_command takes input argument command as a LIST
 def local_command(command,bg=False,redirect=''):
     debug(1,["Attempting local command:",command])
@@ -102,7 +122,30 @@ def debug(level,message):
     if level <= int(config.get("Debug","level")):
         print 'function: ', inspect.stack()[1][3], \
         ': ',' '.join(str(x) for x in message)
-        
+
+def get_binary_user_input(query,option1,result1,option2,result2):
+     while True:
+            answer = raw_input(query).strip()
+            if (answer in [option1,option1.upper()]):
+                return result1
+            elif (answer not in [option2,option2.upper()]):
+                print "Unrecognized input. Please enter "+\
+                    '/'.join([option1,option1.upper(),option2,option2.upper()]) \
+                + " (one character)"
+            else:
+                return result2
+
+#generic input validator; idea is to check whether the input is valid
+#for the particular data type requested, which is set in the parameter cls
+#as the actual data type class, e.g. int or float
+def get_validated_input(query,cls):
+    while True:
+        try:
+            return cls(raw_input(query+":"))
+        except ValueError as e:
+            print e," is not a valid ",cls.__name__
+
+
 #this function checks if a file already exists, and either confirms
 #overwriting or changes the filename to be used as appropriate
 #if creating a new file, it will be in the same directory
