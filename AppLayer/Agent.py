@@ -1,8 +1,7 @@
+import os
 import shared
 import pickle
 import hashlib
-import pika
-from NetUtils import *
 #for brevity
 def g(x,y):
     return shared.config.get(x,y)
@@ -24,17 +23,22 @@ class Agent(object):
         self.OS = shared.OS
         #persistent store of incomplete transactions connected to this agent;
         #initially empty
-        tmp = pickle.load('transactions.p','rb')
-        self.transactions=tmp if tmp else []
+        txfile = os.path.join(self.baseDir,'transactions.p')
+        if os.path.exists(txfile):
+            with open(txfile) as txf:
+                self.transactions = pickle.load(txf)
+        else:
+            self.transactions=[]
+        
         
     def initialiseNetwork(self):
         print "setting up network architecture"
         
-   
+    
     
     #this is either really cool or completely stupid
     def uniqID(self):
-        return hashlib.md5(__repr__(self)).hexdigest()
+        return hashlib.md5(self.__repr__()).hexdigest()
     
     def __repr__(self):
         string_rep=[]

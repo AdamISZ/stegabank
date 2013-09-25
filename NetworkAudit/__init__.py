@@ -1,2 +1,2 @@
-__all__ = ["sharkutils","HTTPMessaging"]
+__all__ = ["sharkutils"]
 

@@ -1,4 +1,5 @@
 import shared
+import time
 import Messaging
 from AppLayer.Agent import Agent
 from AppLayer.Transaction import Transaction
@@ -9,10 +10,9 @@ def g(x,y):
     
 class EscrowAccessor(Agent):
     #note that certain information will have to be retrieved to access escrow
-    def __init__(self,host='',username='',password='',port='',escrowID):
+    def __init__(self,agent,host='',username='',password='',port='',escrowID=''):
         print "instantiating a remote escrow accessor"
         self.agent = agent #this is the user agent who is using this accessor
-        self.transactions = [] 
         self.host = host
         #TODO:need to consider how to securely transfers logins to 
         #people who need it
@@ -21,43 +21,74 @@ class EscrowAccessor(Agent):
         self.accessPort=port
         self.uniqID = escrowID
         
-        self.messagingConnection = \
-        pika.BlockingConnection(pika.ConnectionParameters(host=self.host,\
-                                                        port=self.accessPort))
         #at start up of connection with escrow, our message buffer 
-        #will be empty
-        self.messageBuffer=''
+        #will be empty. it has form {'transactionid.agentid':message}
+        self.messageBuffer={}
         
-    def sendMessages(self,messages=[],recipient=None,transaction=None):
-        recipientID = self.uniqID if recipient = None else recipient.uniqID
-        shared.debug(1,["Want to send message(s): \n",messages," to agent: ",\
-                        recipientID,'\n'])
-        #use pika to send
-        channel = self.messagingConnection.channel()
-        #customarily declare the queue whether it already exists or not
-        #the communication channel is uniquely defined by a combination of the
-        #sending and receiving party
-        queue_name = self.agent.uniqID+','+recipientID+','
-        if (transaction): queue_name += transaction.uniqID
-        channel.queue_declare(queue=queue_name)
-        for message in messages:
-            channel.basic_publish(exchange='',routing_key=queue_name,body=message)
-        #is this needed or possible?
-        #self.MessagingConnection.close()
+    def sendMessages(self,messages=[],recipientID='',transaction=None):
+        recipientID = self.uniqID if recipientID == '' else recipientID
+        return Msg.sendMessages(messages,recipientID,self.host)
+        
     
-    #other application logic will decide when to collect messages on
-    #different topics; here is the low level call to get all unread
-    #messages on either: <me, escrow>,<me,counterparty> or those + tx   
-    def collectMessages(self,queue_name):
-        channel = self.messagingConnection.channel()
-        channel.basic_consume(self.collectMessagesCallback,queue=queue_name,\
-                              no_ack=True)
+    #this method collects all messages addressed to the user specified
+    #by recipientID (which should be the useragent id who owns this accessor)
+    def collectMessages(self):
+        msgs = Msg.collectMessages(self.agent.uniqID())
+        if not msgs: 
+            return None
+        else:
+            self.messageBuffer=msgs
+            return True
         
-    def collectMessagesCallback(self, ch, method,properties,body):
-        #store the messages we got from a call to collectMessages
-        #in a temporary buffer; note that we lose all previous messages
-        #todo: can set up buffers for each possible queue if it helps
-        self.messageBuffer = body
+    def waitForMessages(self,timeout):
+        for x in range(1,timeout):
+            if (self.collectMessages()):
+                return True
+            time.sleep(1)
+        shared.debug(1,["Waiting for messages timed out"])
+        return False
+    
+    
+    def requestTransaction(buyer,seller,amount,price):
+        #construct a message to the escrow
+        tx_rq_key = '0.'+self.agent.uniqID()
+        #todo: handle numeric conversions with appropriate accuracy
+        tx_rq_msg = {tx_rq_key:'TRANSACTION_REQUEST:'+','.join(buyer,seller,\
+                                                    str(amount),str(price))}
+                                                               
+        Msg.sendMessages(tx_rq_msg)
+        
+    
     
     def getLogin(self):
         return [self.host,self.userName,self.password,self.accessPort]
+        
+        
+    def getReponseToTxnRq(tx):
+        
+        accepted=0
+        for i in range(1,10):
+            if escrow.waitForMessages(10): break
+        
+        for k,m in self.messageBuffer.iteritems():
+            if 'TRANSACTION_ACCEPTED' in m and tx.uniqID() in k:
+                accepted=1
+            elif 'TRANSACTION_REJECTED' in m and tx.uniqID() in k:
+                accepted=-1
+                
+        if accepted==-1:    
+            shared.debug(0,["Our transaction was rejected :( - quitting."])
+            exit(1)    
+        elif accepted==1:
+            shared.debug(1,["Transaction was accepted by escrow."])
+            return True
+            
+        if not accepted:
+            shared.debug(0,["Failed to get the tx message after a long wait."])
+            return False
+        
+        
+
+            
+        
+        

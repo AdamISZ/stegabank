@@ -32,7 +32,7 @@ from AppLayer import Transaction
 from AppLayer import Agent
 from AppLayer import UserAgent
 from AppLayer import EscrowAccessor
-from NetworkAudit import *
+from NetworkAudit import sharkutils
 import Messaging
 #=====END LIBRARY IMPORTS==========
 
@@ -58,14 +58,6 @@ if __name__ == "__main__":
     #In the next section we instantiate the agents which are going to take
     #part in the test.
     
-    #initialize a fixed escrow -this is for testing; in prod
-    #we need ability to dynamically use different escrows
-    #the escrow ID is how we look up escrows 
-    escrow = EscrowAccessor(host=g("Escrow","escrow_host"),\
-    username=g(role.title(),"escrow_ssh_user"),\
-    password=g(role.title(),"escrow_ssh_pass"),\
-        port=g(role.title(),"escrow_input_port"),escrowID='123') 
-    
     other = 'seller' if role == 'buyer' else 'buyer'
     
     #instantiate two instances of UserAgent
@@ -76,7 +68,15 @@ if __name__ == "__main__":
     counterparty = UserAgent(g("Directories",other+"_base_dir"),\
         g(other.title(),"btc_address"),g(other.title(),"bank_information"),\
         g(other.title(),"base_currency"))
-
+    
+    #initialize a fixed escrow -this is for testing; in prod
+    #we need ability to dynamically use different escrows
+    #the escrow ID is how we look up escrows 
+    escrow = EscrowAccessor(host=g("Escrow","escrow_host"),agent=myself,\
+    username=g(role.title(),"escrow_ssh_user"),\
+    password=g(role.title(),"escrow_ssh_pass"),\
+        port=g(role.title(),"escrow_input_port"),escrowID='123') 
+        
     #activate the locally instantiated EscrowAccessor object
     myself.addEscrow(escrow).setActiveEscrow(escrow)
     
@@ -98,26 +98,32 @@ if __name__ == "__main__":
     #having collected enough info, we're ready to request a transaction:
     tx =myself.activeEscrow.requestTransaction(buyer=buyer,seller=seller, amount=amount,price=price)
     
-    #the next step is to wait for confirmation from the remote escrow
+    #the next step (for both parties) is to wait for confirmation from the remote escrow
     #that the transaction has been accepted as valid
-    queue_name = myself.uniqID+','+escrowID
-    while True:
-        messages = escrow.collectMessages(queue_name)
-        if messages:
-            break
-    
-    if not SSLLogMessage.parse(message,tx,response='ACCEPTED'):
-        shared.debug(0,["Critical error: escrow rejected transaction. Quitting."])
+    if not escrow.getResponseToTxnRq(tx):
+        shared.debug(0,["Timed out waiting for a response from the escrow."])
         exit(1)
     
     #at this stage the escrow and counterparty have confirmed that the
     #transaction is valid.
     shared.debug(1,["Transaction has been set to: ",tx])
     
+    rspns = shared.get_binary_user_input("Press Y/y to start banking session",\
+                                        'y','y','n','n')
+    if rspns != 'y':
+        shared.debug(0,["You chose not to do the banking session. Please note"\
+        ,"that your transaction is still held on the escrow in an",\
+        "\'initialised\', i.e. pending, state. You can continue at another",\
+        "time. The application will now quit."])
+        exit(0)
+        
     myself.startBankingSession(tx)
     if role=='buyer':
         print "Waiting for you to finish and quit Firefox..."
+        #something to account for the case where the proxy didn't work?
         shared.wait_for_process_death('firefox')
+        #put some code to get the confirmation of storage from escrow
+        #(and counterparty?) so as to be sure everything was done right
     else:
         dummy = raw_input("Waiting for signal of end of banking session.")
     

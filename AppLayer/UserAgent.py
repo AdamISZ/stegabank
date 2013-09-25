@@ -27,7 +27,7 @@ class UserAgent(Agent.Agent):
         #TODO consider how banking sessions may be first class objects;
         #may need more than one
         runID='_'.join(role,transaction.uniqID(),'banksession')
-         new_dir = os.path.join(g("Directories",role+'_base_dir',runID)
+        new_dir = os.path.join(g("Directories",role+'_base_dir',runID))
         if not os.path.exists(new_dir): os.makedirs(new_dir)
         
         shared.debug(0,["starting banking session as ",role,"\n"])
@@ -41,7 +41,7 @@ g("Escrow","escrow_ssh_port"), '-pw', g("Buyer","buyer_ssh_pass"),'-N','-L', \
 g("Buyer","buyer_stcp_port")+':127.0.0.1:'+g("Escrow","escrow_input_port")])
             
             shared.local_command([g("Exepaths","stcppipe_exepath"),'-d',\
-            os.path.join(g("Directories","buyer_base_dir",runID,"stcp_buyer"),\
+            os.path.join(g("Directories","buyer_base_dir",runID,"stcp_buyer")),\
             '-b','127.0.0.1',g("Buyer","buyer_stcp_port"),\
             g("Buyer","buyer_input_port")])
             
@@ -53,9 +53,9 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
 +g("Seller","seller_input_port")])
             
             shared.local_command([g("Exepaths","stcppipe_exepath"),'-d',\
-            os.path.join(g("Directories","buyer_base_dir",runID,"stcp_"+agent),\
-            '-b','127.0.0.1',g(agent.title(),agent+"_stcp_port"),\
-            g(agent.title(),agent+"_input_port")])
+            os.path.join(g("Directories","buyer_base_dir",runID,"stcp_seller"),\
+            '-b','127.0.0.1',g("Seller","seller_stcp_port"),\
+            "Seller","seller_input_port")])
             
     
     def endBankingSession(self,transaction):
@@ -75,11 +75,6 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
         else:
             raise Exception("Attempted to set active an escrow which is not known to this user agent!.\n")
         return self
-    
-    def (self,escrow):
-        #do stuff
-        if (True):
-            print "Successfully connected to escrow:",self.escrow,"\n"
         
     def messageCounterparty(self,message,counterparty,transaction=None):
         print " want to send message: \n",message," to agent: ",counterparty,'\n'

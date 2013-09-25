@@ -9,11 +9,11 @@ def g(x,y):
 #state machine: INVALID|UNINITIALISED|INITIALISED|IN_PROCESS|IN_DISPUTE|COMPLETE|ABORTED
 class Transaction():
     
-    def __init__(self,buyer,seller,amount,price):
+    def __init__(self,buyer,seller,amount,price,state='UNINITIALISED'):
         print "instantiating a transaction"
-        self.state = 'UNINITIALISED'
-        self.buyer=buyer
-        self.seller=seller
+        self.state = state
+        self.buyer=buyerID
+        self.seller=sellerID
         #self.escrow=escrow
         self.amount=amount
         self.price=price #need to consider fiat currency: TODO
@@ -29,7 +29,7 @@ class Transaction():
     
     #this is either really cool or completely stupid
     def uniqID(self):
-        return hashlib.md5(__repr__(self)).hexdigest()
+        return hashlib.md5(self.__repr__()).hexdigest()
         
     #serves for serialization, messaging and debugging, hopefully!
     def __repr__(self):

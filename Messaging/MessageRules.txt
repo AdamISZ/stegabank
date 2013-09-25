@@ -1,0 +1,34 @@
+Messaging Protocol for the ssl log escrow server running rabbitMQ:
+
+1. All messages are passed to other agents depending on the 'recipientID'
+   specified in the call to 'sendMessages' in MessageWrapper.py
+
+2. Messages to escrow only must have recipient ID: "escrow"
+
+3. Messages to both must have "counterpartyID.escrow" 
+
+4. Messages to counterparty only must have "counterpartyID"
+
+5. Each message in the dict messages is of form {'topic':'message'}
+
+6. The 'topic' field will contain <the ID of the transaction>.<the ID of the sender>
+
+6a. In case no transaction is specified in the message, the transaction ID can be replaced by '0' in (6).
+
+7. The 'message' will be a string of text which will be interpreted by the other agent.
+
+8. The 'message' will have a format MSGTYPE:data,data,data,....
+
+9. List of MSGTYPES:
+
+TRANSACTION_REQUEST - data are: buyerID,sellerID,amount,price,currency
+TRANSACTION_ACCEPT - no data.
+CLIENT_TALK - data are: text message to counterparty
+TRANSACTION_REJECT - data are: reason
+BANK_SESSION_START_REQUEST - data are: transactionID,
+BANK_SESSION_START_REJECTED - data are: reason
+BANK_SESSION_READY - no data.
+BANK_SESSION_END - no data.
+DISPUTE_REQUEST - data are: reason for request,..
+DISPUTE_ADJUDICATION - data are: agent awarded to, reason for award
+<TBC>

@@ -5,3 +5,4 @@ from Transaction import Transaction
 from Agent import Agent
 from UserAgent import UserAgent
 from EscrowAccessor import EscrowAccessor
+from EscrowAgent import EscrowAgent

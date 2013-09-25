@@ -53,7 +53,7 @@ def get_remote_files(remote_files,local_dir,login,agent,dir=True):
     params = [config.get("Exepaths","scp_exepath"), '-P',\
     login[3],'-pw',login[2],'-unsafe']
     remote = remote_files+'/*' if dir else remote_files
-    params.extend([login[1]+'@'+login[2]+':'+remote,local_dir+'/.']
+    params.extend([login[1]+'@'+login[2]+':'+remote,local_dir+'/.'])
     print subprocess.check_output(params)
 
 def send_files_remote(remote_dir,local_files,login,agent,dir=True):
@@ -61,10 +61,9 @@ def send_files_remote(remote_dir,local_files,login,agent,dir=True):
     params = [config.get("Exepaths","scp_exepath"), '-P',\
     login[3],'-pw',login[2],'-unsafe']
     local = local_files+'/*' if dir else local_dir
-    params.extend([local,login[1]+'@'+login[2]+':'+remote_dir+'/.']
+    params.extend([local,login[1]+'@'+login[2]+':'+remote_dir+'/.'])
     print subprocess.check_output(params)
     
-    print subprocess.check_output(params)
 #note: local_command takes input argument command as a LIST
 def local_command(command,bg=False,redirect=''):
     debug(1,["Attempting local command:",command])
@@ -105,7 +104,7 @@ def get_login(agent):
 config.get("Escrow","escrow_host"),config.get(agent.title(),agent+"_ssh_pass")]
     
     
-#platform independent strip and split text string output (e.g. from console)
+#platform independent strip and split text string output (e.g. from stdout)
 def pisp(x):
     x=x.rstrip()
     return x.split(PINL)

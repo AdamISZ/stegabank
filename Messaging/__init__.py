@@ -1,2 +1,2 @@
-from HTTPMessaging import MessagingHTTPServerThread
 import pika
+import Messaging as Msg
