@@ -1,7 +1,7 @@
 import time
 import shared
 import Agent
-import Transaction
+from AppLayer.Transaction import Transaction
 import Messaging.MessageWrapper as Msg
 #for brevity
 def g(x,y):
@@ -24,53 +24,103 @@ class EscrowAgent(Agent.Agent):
         #temporary buffer for all messages brought down from MQs
         self.messageBuffer={}
         
+        #persistent store of transaction objects TODO persistence
+        self.transactions=[]
+        
         #this  needs to be persisted as it contains
         #state information - in order to accept requests involving two parties,
         #the escrow needs to keep a record of earlier requests downloaded
-        #from the MQ.
+        #from the MQ. The format is a list of lists, each inner list having
+        #a key,message pair [k,m]
         self.requestStore=[]
-        self.bankSessionRequestStore=[]
         
     def run(self):
         #the main loop to be called for the daemon meaning we're
         #listening for messages/requests/instructions from useragents.
         while True:
+            self.messageBuffer={}
             self.waitForMessages(5)
             if not self.messageBuffer: continue
             #we received at least one message: check the headers,
             #perform the appropriate action
+            shared.debug(0,["We received at least one message in the main loop:",self.messageBuffer])
             for k,m in self.messageBuffer.iteritems():
             # this is effectively a switch/case situation.
             # may look into a more Pythonic way of doing it later TODO
-                if 'TRANSACTION_REQUESTED' in m:
+                if 'TRANSACTION_REQUEST' in m:
+                    shared.debug(0,["Found a transaction request in the buffer"])
                     self.processTransactionRequest([k,m]) 
-                    
-                elif 'BANK_SESSION_START_REQUESTED' in m:
-                    #here need to fire up a stcppipe ready for the
-                    #proxying
-                    self.processBankSessionRequest([k,m])
                 
+                elif 'TRANSACTION_ABORT' in m:
+                    shared.debug(0,["Found a transaction abort instruction in the buffer"])
+                    self.abortTransaction([k,m])
+                    
+                elif 'BANK_SESSION_START_REQUEST' in m:
+                    #here need to fire up a stcppipe ready for the
+                    #proxying TODO
+                    shared.debug(0,["Found a bank session start request in the buffer"])
+                    self.processBankSessionStartRequest([k,m])
+                
+                elif 'BANK_SESSION_ABORT' in m:
+                    shared.debug(0,["Found a bank session abort instruction in the buffer"])
+                    self.abortBankingSession([k,m])
     
+    #for this function we use "instruction" rather than
+    #"request" because users should be able to cancel WITHOUT
+    #permission BEFORE bank session start; after that point,
+    #the transaction rollback may require permission of others
+    def abortTransaction(self,instruction):
+        response=[]
+        tmptx=None
+        #find the transaction
+        txID,recipient = instruction[0].split('.')
+        if txID not in (x.uniqID() for x in self.transactions):
+            response =  ['reject','invalid transaction id']
+        for t in self.transactions:
+            if t.uniqID()==txID:
+                tmptx=t
+                break
+        if tmptx.state in ['INITIALISED','UNINITIALISED']:
+            response=['accept']
+        elif tmptx.state in ['INVALID','ABORTED']:
+            response=['accept',\
+                      'no action - transaction is already aborted or invalid']
+        else:
+            #here we need to find a abort negotation protocol for in-process txs
+            response=['reject','transaction is in process "\
+                      +"and cannot be aborted without agreement']
+        if response[0]=='accept':
+            for recipient in [buyerID,sellerID]:
+                self.sendMessages({txID+'.'+self.escrowID:\
+                            'TRANSACTION_ABORT_ACCEPTED'},recipient)
+            #remove the transaction permanently
+            self.transactions = filter(lambda a: a!=tmptx,self.transactions)
+        else:
+            for recipient in [buyerID,sellerID]:
+                self.sendMessages({txID+'.'+self.escrowID:\
+                        'TRANSACTION_ABORT_REJECTED:'+response[1]},recipient)
+                               
+                               
+                               
     #This function should be called when any TRANSACTION_REQUEST message
     #is sent. It checks for the existence of another message of the 
     #same type with the same parameters. If found, and the requests are
     #deemed compatible, it will send out
     #a transaction accepted message to both parties.
-    #Return values: null return means nothing to do (no matching request)
-    #Otherwise return list, first item is 'accept' or 'reject', if 'reject'
-    #then reason for rejection is second item
-    def processTransactionRequest(request):
+    def processTransactionRequest(self, request):
+        response=[]
         #ID of requesting agent is after the .
+        shared.debug(0,["starting processTR"])
         requester = request[0].split('.')[-1]
+        shared.debug(0,["set the requester to : ",requester])
         #sanity check: make sure the agent is requesting a transaction
         #involving themselves!
         if not requester in request[1]:
-            return ['reject','ID of requesting party not found in transaction']
+            response = ['reject','ID of requesting party not found in transaction']
             
         req_msg_data = request[1].split(':')[1].split(',')
         
-        response=[]
-        for k,m in self.requestStore.iteritems():
+        for [k,m] in self.requestStore:
             #ignore the message that made the request
             if [k,m]==request:
                 continue
@@ -97,22 +147,26 @@ class EscrowAgent(Agent.Agent):
             if response[0]=='accept':
                 #create the transaction object and store it
                 tx = Transaction(req_msg_data[0],req_msg_data[1],req_msg_data[2]\
-                                ,req_msg_data[3],state='INITIALISED')
+                                ,req_msg_data[3],req_msg_data[4],state='INITIALISED')
                 self.transactions.append(tx)
                 
-                #create the acceptance message
-                message = {tx.uniqID()+'.'+self.escrowID:'TRANSACTION_ACCEPTED:'}
+                #create the acceptance message - we MUST give the recipient
+                #the unique ID otherwise it won't match in future correspondence
+                message = {tx.uniqID()+'.'+self.escrowID:'TRANSACTION_ACCEPTED:'\
+                        +','.join([tx.buyer,tx.seller,str(tx.amount),str(tx.price),tx.currency,str(tx.creationTime)])}
                 
                 #send acceptance to BOTH parties
-                for recipientID in req_msg_data[0:1]:
+                for recipientID in req_msg_data[0:2]:
+                    shared.debug(0,["send acceptance to counterparty:",recipientID])
                     self.sendMessages(message,recipientID)
                     
                 #delete any earlier requests matching this
                 #counterparty pair from the requestStore (wipe slate clean)
                 self.requestStore = \
-                [x for x in self.requestStore if req_msg_data[0] in \
-                x[1].split(':')[1].split(',') and req_msg_data[1] in \
-                x[1].split(':')[1].split(',')]
+                [x for x in self.requestStore if (req_msg_data[0] not in \
+                x[1].split(':')[1].split(',')) and (req_msg_data[1] not in \
+                x[1].split(':')[1].split(','))]
+                shared.debug(0,["After accepting transaction the request store is now:",self.requestStore])
                 
             elif response[0]=='reject':
                 #send rejection to both; no need to create a tx object!
@@ -123,9 +177,9 @@ class EscrowAgent(Agent.Agent):
                 #delete any earlier requests matching this
                 #counterparty pair from the requestStore (wipe slate clean)
                 self.requestStore = \
-                [x for x in self.requestStore if req_msg_data[0] in \
-                x[1].split(':')[1].split(',') and req_msg_data[1] in \
-                x[1].split(':')[1].split(',')]
+                [x for x in self.requestStore if (req_msg_data[0] not in \
+                x[1].split(':')[1].split(',')) and (req_msg_data[1] not in \
+                x[1].split(':')[1].split(','))]
                         
             else:
                 shared.debug(0,["something seriously wrong here"])
@@ -134,75 +188,53 @@ class EscrowAgent(Agent.Agent):
             self.requestStore.append(request)
         
             
-    def processBankSessionRequest(request):
+    def processBankSessionStartRequest(self,request):
         response=[]
         #ID of requesting agent is after the .
-        requester = request[0].split('.')[-1]
+        requester = request[0].split('.')[1]
         #sanity check: make sure the agent is requesting a session for a 
         #transaction that (a) they own and (b) is in the correct state
-        txID = request[1].split(':')[1]
+        txID = request[0].split('.')[0]
+        
+        print self.transactions
         
         if txID not in (x.uniqID() for x in self.transactions):
             response =  ['reject','invalid transaction id']
-        for t in self.transactions:
+        for i,t in enumerate(self.transactions):
             if t.uniqID()==txID:
-                buyerID,sellerID = [t.buyerID, t.sellerID] 
-                
-        response=[]
-        for k,m in self.bankSessionRequestStore.iteritems():
-            
-            #parse the message part; it's just a transaction ID
-            msg_data = m.split(':')[1]
-            
-            #ignore the message that made the request
-            if [k,m]==request:
-                continue
-            #ignore the message if it isn't a session start req
-            elif 'BANK_SESSION_START_REQUEST' != m.split(':')[0]:
-                continue
-            
-            
-            elif not msg_data==txID:
-                continue
-            
-            else:
-                response=['accept']
-                break
+                buyerID,sellerID = [t.buyer, t.seller]
+                if t.state != 'INITIALISED':
+                    response = ['reject','transaction is not in state INITIALISED']
+                else:
+                    #check that proxy is running?TODO
+                    self.transactions[i].state = 'IN_PROCESS'
+                    response = ['accept']
                 
         if response:
             if response[0]=='accept':
                 #TODO: two actions are needed: set up a stcppipe for this run
                 #and then check that seller's proxy is ready
                 #
-                
-                message = {txID+'.'+self.escrowID:'BANK_SESSION_READY:'}
+                message = {txID+'.'+self.escrowID:'BANK_SESSION_START_ACCEPTED:'}
                 
                 #send acceptance to both parties involved
                 for recipientID in [buyerID,sellerID]:
                     self.sendMessages(message,recipientID)
-                    
-                #delete any earlier requests matching this
-                #counterparty pair from the requestStore (wipe slate clean)
-                self.bankSessionRequestStore = \
-            [x for x in self.bankSessionRequestStore if x[1].split(':')[1]!=txID]
-                
                 
             elif response[0]=='reject':
-                message={'0.'+self.escrowID:'BANK_SESSION_START_REJECTED:'+response[1]}
+                message={txID+'.'+self.escrowID:'BANK_SESSION_START_REJECTED:'+response[1]}
                 #send rejection to both parties involved
                 for recipientID in [buyerID,sellerID]:
                     self.sendMessages(message,recipientID)
-                
-                #delete any earlier requests matching this
-                #counterparty pair from the requestStore (wipe slate clean)
-                self.bankSessionRequestStore = \
-            [x for x in self.bankSessionRequestStore if x[1].split(':')[1]!=txID]
                         
             else:
                 shared.debug(0,["something seriously wrong here"])
                 exit(1)
         else:
-            self.bankingSessionRequestStore.append(request)
+            #no response means transaction not found
+            message ={txID+'.'+self.escrowID:'BANK_SESSION_START_REJECTED: no such transaction.'}
+            for recipientID in [buyerID,sellerID]:
+                self.sendMessages(message,recipientID)
             
             
     def sendMessages(self,messages,recipientID,transaction=None):
@@ -211,7 +243,8 @@ class EscrowAgent(Agent.Agent):
     
     #this method collects all messages addressed to this agent
     def collectMessages(self):
-        msgs = Msg.collectMessages(self.uniqID())
+        msgs = Msg.collectMessages(self.escrowID)
+        shared.debug(0,["Here are the messages collected:",msgs])
         if not msgs: 
             return None
         else:
@@ -222,7 +255,7 @@ class EscrowAgent(Agent.Agent):
         for x in range(1,timeout):
             if (self.collectMessages()):
                 return True
-            time.sleep(1)
+            time.sleep(2)
         shared.debug(1,["Waiting for messages timed out"])
         return False
     

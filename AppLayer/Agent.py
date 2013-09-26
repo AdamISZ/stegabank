@@ -36,13 +36,14 @@ class Agent(object):
         
     
     
-    #this is either really cool or completely stupid
-    def uniqID(self):
-        return hashlib.md5(self.__repr__()).hexdigest()
     
-    def __repr__(self):
-        string_rep=[]
-        for key, value in self.__dict__.iteritems():
-            string_rep.append(str(key)+'='+str(value))
+    def uniqID(self):
+        return self.BTCAddress
+
+#after a lot of messing about I decided to stick with just ID=bitcoin address    
+''' __repr__(self):
+        string_rep = ['dir':self.baseDir,'btcadd':self.btcadd,'currency':self.baseCurrency]
+        for property in [self.baseDir,self.btcadd,self.baseCurrency]
+        string_rep.append(str(key)+'='+str(value))
         
-        return '^'+'|'.join(string_rep)+'^'
+        return '^'+'|'.join(string_rep)+'^' '''

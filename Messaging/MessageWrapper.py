@@ -11,6 +11,8 @@ import shared
 #for brevity
 def g(x,y):
     return shared.config.get(x,y)
+
+
 #************************************
 
 
@@ -27,14 +29,14 @@ response={}
 
 #instantiate a connection to the host on startup
 #since Python ensures only one import, this should be called once per process
-try:
+'''try:
     conn = pika.BlockingConnection(pika.ConnectionParameters(\
                                         host=g("Escrow","escrow_host")))
 except:
     #TODO handle connection failure gracefully
     shared.debug(0,["Critical error: cannot connect to host:",\
                     g("Escrow","escrow_host")])
-    exit(1)
+    exit(1)'''
             
 #interface: the arguments must be:
 #messages - a dict of form {'topic':'message','topic':'message',..}
@@ -43,72 +45,92 @@ except:
 #specified in MessageRules.txt in this directory.
 #server - the IP address of the host on which the rabbitMQ server is running
 def sendMessages(messages={},recipientID='escrow',server=''):
-        #todo: error handling in this function
-        shared.debug(1,["Attempting to send message(s): \n",messages,\
+    try:
+        conn = pika.BlockingConnection(pika.ConnectionParameters(\
+                                        host=g("Escrow","escrow_host")))
+    except:
+        #TODO handle connection failure gracefully
+        shared.debug(0,["Critical error: cannot connect to host:",\
+                    g("Escrow","escrow_host")])
+        exit(1)
+        
+    #todo: error handling in this function
+    shared.debug(1,["Attempting to send message(s): \n",messages,\
                         " to recipient: ",recipientID,'\n'])
         
-        chan = conn.channel()
+    chan = conn.channel()
+    
+    #26 Sep 2013: the model which best fits simple message seems
+    #to be declaration of static queues for each route (see 1st tutorial on 
+    #rabbitmq python tutorials),
+    #rather than dynamic routing with topic type exchange; the problem
+    #with the latter is that queues are ephemeral and if we publish to 
+    #a routing key with no current consumers, the message just drops into
+    #the void.
+    chan.queue_declare(recipientID)
         
+    #notice we don't need to declare a queue; we're letting the exchange
+    #figure out the right queues to publish to based on the topic
+    for hdr,msg in messages.iteritems():
+        shared.debug(0,["about to send a message:"])
+        chan.basic_publish(exchange='',\
+        routing_key=recipientID,body='|'.join([hdr,msg]))
+    
+    conn.close()
         
-        #the 'topic' exchange type is the most flexible; for basic idea see
-        #https://www.rabbitmq.com/tutorials/tutorial-five-python.html
-        chan.exchange_declare(exchange=EXCN,type='topic')
-        
-        #notice we don't need to declare a queue; we're letting the exchange
-        #figure out the right queues to publish to based on the topic
-        for hdr,msg in messages.iteritems():
-            channel.basic_publish(exchange=EXCN,\
-            routing_key=recipientID,body='|'.join(hdr,msg))
-        #is this needed or possible?
-        #conn.close()
-        
-        return True
+    return True
 
 #interface: the arguments must be:
 #recipientID - the unique ID of the agent who receives all messages for them
 #all messages will be returned in a dict for processing
 def collectMessages(recipientID):
-        
+    try:
+        conn = pika.BlockingConnection(pika.ConnectionParameters(\
+                                        host=g("Escrow","escrow_host")))
+    except:
+        #TODO handle connection failure gracefully
+        shared.debug(0,["Critical error: cannot connect to host:",\
+                    g("Escrow","escrow_host")])
+        exit(1)    
         #parse the argument into a set of routing keys
         #todo: understand the rule of this better - may need to change
-        routing_keys = [recipientID+'.*']
+    routing_keys = [recipientID]
         
-        global response
+    global response
         
-        chan = conn.channel()
+    chan = conn.channel()
         
-        #see equiv in sendMessages
-        chan.exchange_declare(exchange=EXCN,type='topic')
+    #see equiv in sendMessages
+    chan.queue_declare(recipientID)
         
-        result = chan.queue_declare(exclusive=True)
-        queue_name = result.method.queue
-        for k in routing_keys:
-            chan.queue_bind(exchange=EXCN,queue=queue_name,routing_key=k)
-        
+    for k in routing_keys:
         #collect all messages due for the channel chan
-        chan.basic_consume(collectMessagesCallback,queue=queue_name,no_ack=True)
+        chan.basic_consume(collectMessagesCallback,queue=recipientID,no_ack=True)
+    
+    conn.close()
+    
+    returned_msgs = response if response else None
         
-        returned_msgs = response if response else None
+    #clean the buffer for next time
+    response = {}
         
-        #clean the buffer for next time
-        response = {}
-        
-        #note that a null return should just be interpreted as 'no messages';
-        #although there may of course be errors under the hood that is nobody's
-        #business!
-        return returned_msgs
+    #note that a null return should just be interpreted as 'no messages';
+    #although there may of course be errors under the hood that is nobody's
+    #business!
+    return returned_msgs
             
         
 def collectMessagesCallback(ch, method,properties,body):
-        global response
-        shared.debug(2,["We received messages:",msg])
-        #parse the messages into a dict structure
-        if '|' not in body:
-            shared.debug(0,["Format error in message:",body,";message ignored"])
-            return None
-        else:
-            msg = body.split('|')
-            response[msg[0]]=msg[1]
+    global response
+    shared.debug(2,["We received messages:",body])
+    #shared.debg(2,["Properties were: ",properties])
+    #parse the messages into a dict structure
+    if '|' not in body:
+        shared.debug(0,["Format error in message:",body,";message ignored"])
+        return None
+    else:
+        msg = body.split('|')
+        response[msg[0]]=msg[1]
         
         
         

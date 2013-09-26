@@ -36,12 +36,6 @@ from NetworkAudit import sharkutils
 import Messaging
 #=====END LIBRARY IMPORTS==========
 
-
-#basic functional testing of application layer
-#t = Transaction(Agent(),Agent(),'100','101')
-#check functioning of __repr__ (will be used for messaging)
-#print t
-
 if __name__ == "__main__":
     #Load all necessary configurations:
     #========================
@@ -85,9 +79,11 @@ if __name__ == "__main__":
     #use the command line to drive; ask the user what they want to do: buy/sell
     #and how much
     try:
-        role = shared.get_binary_user_input("Do you want to buy or sell? [B/S]",'b','buyer','s','seller')
+        role = shared.get_binary_user_input("Do you want to buy or sell? [B/S]",\
+                                            'b','buyer','s','seller')
         amount = shared.get_validated_input("Enter amount to trade: ",float)
-        price = shared.get_validated_input("Enter worst acceptable price in "+myself.baseCurrency+" per BTC: ",float)
+        price = shared.get_validated_input("Enter worst acceptable price in "+\
+                                        myself.baseCurrency+" per BTC: ",float)
     
     except:
         shared.debug(0,["Error in command line agent execution. Quitting!"])
@@ -96,7 +92,12 @@ if __name__ == "__main__":
     buyer = myself if role=='buyer' else counterparty
     seller = counterparty if role=='buyer' else myself
     #having collected enough info, we're ready to request a transaction:
-    tx =myself.activeEscrow.requestTransaction(buyer=buyer,seller=seller, amount=amount,price=price)
+    myself.activeEscrow.requestTransaction(buyer=buyer,seller=seller, \
+                    amount=amount,price=price,curr=myself.baseCurrency)
+    
+    #make a temporary transaction object with our data to cross check 
+    #with escrow response
+    tx = Transaction(buyer.uniqID(),seller.uniqID(),amount,price,buyer.baseCurrency)
     
     #the next step (for both parties) is to wait for confirmation from the remote escrow
     #that the transaction has been accepted as valid
@@ -105,27 +106,63 @@ if __name__ == "__main__":
         exit(1)
     
     #at this stage the escrow and counterparty have confirmed that the
-    #transaction is valid.
-    shared.debug(1,["Transaction has been set to: ",tx])
+    #transaction represented by 'tx' is valid.
     
-    rspns = shared.get_binary_user_input("Press Y/y to start banking session",\
-                                        'y','y','n','n')
-    if rspns != 'y':
-        shared.debug(0,["You chose not to do the banking session. Please note"\
-        ,"that your transaction is still held on the escrow in an",\
-        "\'initialised\', i.e. pending, state. You can continue at another",\
-        "time. The application will now quit."])
-        exit(0)
-        
-    myself.startBankingSession(tx)
+    shared.debug(1,["Transaction has been set to: ",tx.uniqID()])
+    
     if role=='buyer':
-        print "Waiting for you to finish and quit Firefox..."
+        myself.activeEscrow.requestBankSessionStart(tx)
+    
+    #wait for response - same for both parties at least in this script.
+    if not myself.activeEscrow.getResponseToBankSessionStartRequest(tx):
+        shared.debug(0,["Timed out waiting for banking session to be started."])
+        exit(1)
+
+    if role=='seller':
+        rspns = shared.get_binary_user_input(\
+    "Enter Y/y after you have started the proxy server (squid) on your local machine:",\
+        'y','y','n','n')
+        if rspns != 'y':
+            shared.debug(0,["You have rejected the banking session. "+\
+                            "Abort instruction will be sent."])
+            myself.escrow.sendBankingSessionAbortInstruction(tx)
+            rspns = shared.get_binary_user_input("Do you want to abort the "+\
+"transaction entirely? If Y/y, the record of the transaction will be erased on"+\
+"the remote escrow. If N/n, the transaction will remain in an initialised "+\
+"state, waiting for you to conduct the banking session later.",'y','y','n','n')
+            if rspns=='y':
+                myself.escrow.sendTransactionAbortInstruction(tx)
+            exit(0)
+    else:        
+        rspns = shared.get_binary_user_input("Enter Y/y to start banking session",\
+                                        'y','y','n','n')
+        if rspns != 'y':
+            myself.escrow.sendBankingSessionAbortInstruction(tx)
+            rspns = shared.get_binary_user_input("Do you want to abort the "+\
+"transaction entirely? If Y/y, the record of the transaction will be erased on"+\
+"the remote escrow. If N/n, the transaction will remain in an initialised "+\
+"state, waiting for you to conduct the banking session later.",'y','y','n','n')
+            if rspns=='y':
+                myself.escrow.sendTransactionAbortInstruction(tx)
+            exit(0)
+    
+    #if we reached here as seller it means we promise that squid is running.
+    #if we reached here as buyer it means we promise to be ready to start banking.
+    if role=='buyer':
+        myself.startBankingSession(tx)
+            
+        print "When firefox starts, please perform internet banking." +\
+            "\n When you have finished, please close firefox."
+        time.sleep(5)
+        #start up firefox here TODO
+        
         #something to account for the case where the proxy didn't work?
         shared.wait_for_process_death('firefox')
         #put some code to get the confirmation of storage from escrow
         #(and counterparty?) so as to be sure everything was done right
     else:
-        dummy = raw_input("Waiting for signal of end of banking session.")
+        shared.debug(0,["Waiting for signal of end of banking session."])
+        #wait for escrow message
     
 
 

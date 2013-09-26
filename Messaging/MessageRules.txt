@@ -22,13 +22,17 @@ Messaging Protocol for the ssl log escrow server running rabbitMQ:
 9. List of MSGTYPES:
 
 TRANSACTION_REQUEST - data are: buyerID,sellerID,amount,price,currency
-TRANSACTION_ACCEPT - no data.
+TRANSACTION_ACCEPT - data are: buyerID,sellerID,amount,price,currency,creation time
 CLIENT_TALK - data are: text message to counterparty
 TRANSACTION_REJECT - data are: reason
-BANK_SESSION_START_REQUEST - data are: transactionID,
+TRANSACTION_ABORT - no data
+TRANSACTION_ABORT_ACCEPTED - no data
+TRANSACTION_ABORT_REJECTED - data are: reason
+BANK_SESSION_START_REQUEST - no data
+BANK_SESSION_START_ACCEPTED - no data
 BANK_SESSION_START_REJECTED - data are: reason
-BANK_SESSION_READY - no data.
-BANK_SESSION_END - no data.
+BANK_SESSION_END - no data
+BANK_SESSION_ABORT - no data
 DISPUTE_REQUEST - data are: reason for request,..
 DISPUTE_ADJUDICATION - data are: agent awarded to, reason for award
 <TBC>

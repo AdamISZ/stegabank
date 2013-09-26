@@ -10,7 +10,7 @@ def loadconfig():
     # First try to load the config file  from the program
     # directory
     shared.config.read('ssllog.ini')
-    
+'''    
     #print config.sections() #for testing
         
     #load paths of executables
@@ -44,4 +44,4 @@ def loadconfig():
     #Bitcoin specific config
     seller_addr_funded_multisig = shared.config.get("Escrow","seller_addr_funded_multisig")
     #=============================
-    
+   ''' 

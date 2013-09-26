@@ -8,6 +8,8 @@ def g(x,y):
 import helper_startup
 import AppLayer
 from AppLayer import EscrowAgent
+import logging
+logging.getLogger('pika').setLevel(logging.DEBUG)
 #=====END LIBRARY IMPORTS==========
 
 if __name__ == "__main__":

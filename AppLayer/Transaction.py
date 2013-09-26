@@ -1,5 +1,6 @@
 import shared
 import time
+import hashlib
 #for brevity
 def g(x,y):
     return shared.config.get(x,y)
@@ -9,7 +10,7 @@ def g(x,y):
 #state machine: INVALID|UNINITIALISED|INITIALISED|IN_PROCESS|IN_DISPUTE|COMPLETE|ABORTED
 class Transaction():
     
-    def __init__(self,buyer,seller,amount,price,state='UNINITIALISED'):
+    def __init__(self,buyerID,sellerID,amount,price,currency,state='UNINITIALISED'):
         print "instantiating a transaction"
         self.state = state
         self.buyer=buyerID
@@ -17,27 +18,29 @@ class Transaction():
         #self.escrow=escrow
         self.amount=amount
         self.price=price #need to consider fiat currency: TODO
-        self.buyerBTCAddress = ''#buyer.getBTCAddress()
-        self.sellerBTCAddress = ''#seller.getBTCAddress()
+        self.currency=currency
+        #?
         self.escrowBTCAddress = ''#escrow.getBTCAddress()
         self.multisigAddress = ''#requestMultisigAddress()
-        self.creationTime = time.time()
-        self.state = 'INITIALISED'
+        #
+        self.creationTime = int(time.time())
+        self.state = state
         
     def requestMultisigAddress(self):
         print "creating a multisig address for transaction: \n",self
     
-    #this is either really cool or completely stupid
+    #Need timestamp to ensure uniqueness
     def uniqID(self):
-        return hashlib.md5(self.__repr__()).hexdigest()
-        
+        return hashlib.md5(self.seller+self.buyer+str(self.creationTime)).hexdigest()
+    
+    '''    
     #serves for serialization, messaging and debugging, hopefully!
     def __repr__(self):
         string_rep=[]
         for key, value in self.__dict__.iteritems():
             string_rep.append(str(key)+'='+str(value))
         
-        return '|'.join(string_rep)
+        return '|'.join(string_rep)'''
         
     
         
