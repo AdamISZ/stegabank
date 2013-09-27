@@ -1,6 +1,7 @@
 softwareVersion = '0.0.1'
 verbose = 1
 import os
+import time
 import errno
 import inspect
 import platform
@@ -16,17 +17,26 @@ OS = platform.system()
 PINL = '\r\n' if OS == 'Windows' else '\n'
 hexdigits = set('0123456789abcdefABCDEF')
 
+#v. simple, just give me that directory whether it exists yet or not!
+def makedir(dirlist):
+    new_dir = os.path.join(*dirlist)
+    if not os.path.exists(new_dir): os.makedirs(new_dir)
+    return new_dir
 
+#an ugly idea; but it's OK for now
 def wait_for_process_death(pname):
     while True:
         ff_found=False
         for proc in psutil.process_iter():
-            if 'firefox' in proc.name:
+            if pname in proc.name:
                 ff_found = True
                 time.sleep(1)
         if not ff_found: break
             
-#call a command on the remote escrow - intended to be platform independent,
+#Update 27 Sep 2013. It seems a bit mad to think that this might be OK;
+#running remote commands on a remote server by untrusted parties!? Only 
+#use it for testing where it will be convenient sometimes.
+'''#Call a command on the remote escrow - intended to be platform independent,
 #allow background or foreground execution, redirect to a file on remote server
 def remote_escrow_command(command,redirect='',bg=False):
     ssh = config.get("Exepaths","sshpass_exepath")
@@ -44,7 +54,7 @@ def remote_escrow_command(command,redirect='',bg=False):
         #in case of foreground execution, we can use the output; if not
         #it doesn't matter
     return subprocess.check_output([ssh,login[0]+'@'+login[1],'-P',ssh_port,\
-                                '-pw',login[2],command])
+                                '-pw',login[2],command])'''
    
 #copy all files from remote_dir on the remote (escrow) server to the local_dir
 #directory on the local machine
@@ -72,11 +82,11 @@ def local_command(command,bg=False,redirect=''):
         if OS=='Windows': 
             command.append(' > NUL 2>&1')
         elif OS=='Linux':
-            command.append(' > /dev/null 2>&1')
+            command.extend(['>', '/dev/null', '2>&1'])
         else:
             debug(0,["OS not recognised, quitting."])
     elif redirect:
-        command.extend('>',redirect)
+        command.extend(['>',redirect])
     
     if OS == 'Windows':
         if bg:
@@ -90,10 +100,11 @@ def local_command(command,bg=False,redirect=''):
             return subprocess.check_output(command)
     elif OS == 'Linux':
         if bg: 
-            command = command.append('&')
-        #in case of foreground execution, we can use the output; if not
-        #it doesn't matter
-        return subprocess.check_output(command)
+            subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        else:
+            #in case of foreground execution, we can use the output; if not
+            #it doesn't matter
+            return subprocess.check_output(command)
     else:
         debug(0,["OS not recognised, quitting."])
         

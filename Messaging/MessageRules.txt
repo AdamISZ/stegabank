@@ -31,7 +31,7 @@ TRANSACTION_ABORT_REJECTED - data are: reason
 BANK_SESSION_START_REQUEST - no data
 BANK_SESSION_START_ACCEPTED - no data
 BANK_SESSION_START_REJECTED - data are: reason
-BANK_SESSION_END - no data
+BANK_SESSION_ENDED - no data
 BANK_SESSION_ABORT - no data
 DISPUTE_REQUEST - data are: reason for request,..
 DISPUTE_ADJUDICATION - data are: agent awarded to, reason for award

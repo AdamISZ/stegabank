@@ -11,7 +11,7 @@ import shared
 #for brevity
 def g(x,y):
     return shared.config.get(x,y)
-
+import time
 
 #************************************
 
@@ -24,36 +24,33 @@ EXCN = 'ssllog_main'
 #from the MQ server. Clients of this module should NOT
 #rely on its contents!
 response={}
+
+conn = None
 #+++++++++++++++++++++++++++++++++++
 
-
-#instantiate a connection to the host on startup
-#since Python ensures only one import, this should be called once per process
-'''try:
-    conn = pika.BlockingConnection(pika.ConnectionParameters(\
-                                        host=g("Escrow","escrow_host")))
-except:
-    #TODO handle connection failure gracefully
-    shared.debug(0,["Critical error: cannot connect to host:",\
-                    g("Escrow","escrow_host")])
-    exit(1)'''
-            
-#interface: the arguments must be:
-#messages - a dict of form {'topic':'message','topic':'message',..}
-#recipientID - a unique ID representing one or more recipients - this will
-#be used to choose the correct queue/binding in rabbit MQ. The format is
-#specified in MessageRules.txt in this directory.
-#server - the IP address of the host on which the rabbitMQ server is running
-def sendMessages(messages={},recipientID='escrow',server=''):
+def instantiateConnection(un='guest',pw='guest'):
+    global conn
     try:
-        conn = pika.BlockingConnection(pika.ConnectionParameters(\
-                                        host=g("Escrow","escrow_host")))
+        pp = 'amqp://'+un+':'+pw+'@'+\
+        g("Escrow","escrow_host")+':'+g("Escrow","rabbitmq_port")+'/%2f'
+        shared.debug(0,["Set parameter string to:",pp])
+        parameters = pika.URLParameters(pp)
+        conn = pika.BlockingConnection(parameters)
     except:
         #TODO handle connection failure gracefully
         shared.debug(0,["Critical error: cannot connect to host:",\
                     g("Escrow","escrow_host")])
         exit(1)
         
+        
+#interface: the arguments must be:
+#messages - a dict of form {'topic':'message','topic':'message',..}
+#recipientID - a unique ID representing one or more recipients - this will
+#be used to choose the correct queue/binding in rabbit MQ. The message format is
+#specified in MessageRules.txt in this directory.
+#server - the IP address of the host on which the rabbitMQ server is running
+def sendMessages(messages={},recipientID='escrow',server='',un='guest',passwd='guest'):
+    global conn    
     #todo: error handling in this function
     shared.debug(1,["Attempting to send message(s): \n",messages,\
                         " to recipient: ",recipientID,'\n'])
@@ -75,25 +72,35 @@ def sendMessages(messages={},recipientID='escrow',server=''):
         shared.debug(0,["about to send a message:"])
         chan.basic_publish(exchange='',\
         routing_key=recipientID,body='|'.join([hdr,msg]))
-    
-    conn.close()
         
     return True
 
+def getSingleMessage(recipientID,timeout=30):
+    global conn    
+    chan = conn.channel()
+    chan.queue_declare(queue=recipientID)
+    for i in range(1,timeout):
+        time.sleep(1)
+        method_frame,header_frame,body = chan.basic_get(queue=recipientID)
+        if not method_frame:
+            continue
+        else:
+            if '|' not in body:
+                shared.debug(0,["Format error in message:",body,";message ignored"])
+                return None
+            else:
+                msg = body.split('|')
+                return {msg[0]:msg[1]}
+        
+    
 #interface: the arguments must be:
 #recipientID - the unique ID of the agent who receives all messages for them
 #all messages will be returned in a dict for processing
 def collectMessages(recipientID):
-    try:
-        conn = pika.BlockingConnection(pika.ConnectionParameters(\
-                                        host=g("Escrow","escrow_host")))
-    except:
-        #TODO handle connection failure gracefully
-        shared.debug(0,["Critical error: cannot connect to host:",\
-                    g("Escrow","escrow_host")])
-        exit(1)    
-        #parse the argument into a set of routing keys
-        #todo: understand the rule of this better - may need to change
+    global conn
+           
+    #parse the argument into a set of routing keys
+    #todo: understand the rule of this better - may need to change
     routing_keys = [recipientID]
         
     global response
@@ -106,8 +113,6 @@ def collectMessages(recipientID):
     for k in routing_keys:
         #collect all messages due for the channel chan
         chan.basic_consume(collectMessagesCallback,queue=recipientID,no_ack=True)
-    
-    conn.close()
     
     returned_msgs = response if response else None
         

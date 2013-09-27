@@ -1,4 +1,5 @@
 import time
+import os
 import shared
 import Agent
 from AppLayer.Transaction import Transaction
@@ -17,6 +18,8 @@ class EscrowAgent(Agent.Agent):
         
         #messaging server should always be local for escrow
         self.host='127.0.0.1'
+        
+        Msg.instantiateConnection(un='escrow',pw='escrow')
         
         #hardcoded for testing TODO
         self.escrowID='123'
@@ -56,15 +59,19 @@ class EscrowAgent(Agent.Agent):
                     self.abortTransaction([k,m])
                     
                 elif 'BANK_SESSION_START_REQUEST' in m:
-                    #here need to fire up a stcppipe ready for the
-                    #proxying TODO
                     shared.debug(0,["Found a bank session start request in the buffer"])
                     self.processBankSessionStartRequest([k,m])
                 
                 elif 'BANK_SESSION_ABORT' in m:
                     shared.debug(0,["Found a bank session abort instruction in the buffer"])
                     self.abortBankingSession([k,m])
-    
+                
+                elif 'BANK_SESSION_ENDED' in m:
+                    shared.debug(0,["Found a bank session ended notification in the buffer"])
+                    #shut down the stcppipe for this run
+                    #TODO: handle process shutdown better than this!
+                    shared.local_command(['pkill', '-SIGTERM', 'stcppipe'])
+                    
     #for this function we use "instruction" rather than
     #"request" because users should be able to cancel WITHOUT
     #permission BEFORE bank session start; after that point,
@@ -187,7 +194,11 @@ class EscrowAgent(Agent.Agent):
         else:
             self.requestStore.append(request)
         
-            
+    #this is called, i.e. initiated, by buyer only, but
+    #we need to send a message to seller to check squid+ssllog is running,
+    #and to start their stcppipe. So a reject can be sent back to the buyer
+    #if that doesn't work. The main point is that the seller should not need
+    #to perform user input, only to have ssllog running.         
     def processBankSessionStartRequest(self,request):
         response=[]
         #ID of requesting agent is after the .
@@ -208,33 +219,39 @@ class EscrowAgent(Agent.Agent):
                 else:
                     #check that proxy is running?TODO
                     self.transactions[i].state = 'IN_PROCESS'
+                    #TODO: killing pre-existing pipes here is only valid
+                    #for one-session-at-a-time model; OK for now
+                    shared.local_command(['pkill','-SIGTERM','stcppipe'],bg=True)
+                    #prepare file storage on escrow for logs, start stcppipe
+                    runID='_'.join(['escrow',txID,'banksession'])
+                    d = shared.makedir([g("Directories","escrow_base_dir"),runID])
+                    stcpd = shared.makedir([d,'stcp_escrow'])
+                    shared.local_command([g("Exepaths","stcppipe_exepath"),'-d',\
+                    stcpd, '-b','127.0.0.1', g("Escrow","escrow_stcp_port"),\
+                    g("Escrow","escrow_input_port")],bg=True)
+                    
                     response = ['accept']
                 
-        if response:
-            if response[0]=='accept':
-                #TODO: two actions are needed: set up a stcppipe for this run
-                #and then check that seller's proxy is ready
-                #
-                message = {txID+'.'+self.escrowID:'BANK_SESSION_START_ACCEPTED:'}
-                
-                #send acceptance to both parties involved
-                for recipientID in [buyerID,sellerID]:
-                    self.sendMessages(message,recipientID)
-                
-            elif response[0]=='reject':
-                message={txID+'.'+self.escrowID:'BANK_SESSION_START_REJECTED:'+response[1]}
-                #send rejection to both parties involved
-                for recipientID in [buyerID,sellerID]:
-                    self.sendMessages(message,recipientID)
-                        
-            else:
-                shared.debug(0,["something seriously wrong here"])
-                exit(1)
-        else:
-            #no response means transaction not found
-            message ={txID+'.'+self.escrowID:'BANK_SESSION_START_REJECTED: no such transaction.'}
+        if response[0]=='accept':
+            #TODO: two actions are needed: set up a stcppipe for this run
+            #and then check that seller's proxy is ready
+            #
+            message = {txID+'.'+self.escrowID:'BANK_SESSION_START_ACCEPTED:'}
+            
+            #send acceptance to both parties involved
             for recipientID in [buyerID,sellerID]:
                 self.sendMessages(message,recipientID)
+            
+        elif response[0]=='reject':
+            message={txID+'.'+self.escrowID:'BANK_SESSION_START_REJECTED:'+response[1]}
+            #send rejection to both parties involved
+            for recipientID in [buyerID,sellerID]:
+                self.sendMessages(message,recipientID)
+                    
+        else:
+            shared.debug(0,["something seriously wrong here"])
+            exit(1)
+        
             
             
     def sendMessages(self,messages,recipientID,transaction=None):
@@ -258,32 +275,6 @@ class EscrowAgent(Agent.Agent):
             time.sleep(2)
         shared.debug(1,["Waiting for messages timed out"])
         return False
-    
-    def messageUserAgent(self,message,agent,transaction=None):
-        print " want to send message: \n",message," to agent: ",agent,'\n'
-    
-    def messageSuperEscrow(self,message,escrow,transaction=None):
-        print "sending message or data: \n",message," to super escrow: ",escrow,"\n"
-    
-    def handleDispute(self,transaction,reason):
-        print "Handling dispute: ",reason," for transaction: ",transaction,"\n"
-        
-        
-    def startTransaction(self, transaction,counterparties):
-        print "initialising a transaction: ",transaction," with counterparties:"\
-            ,counterparties,"\n"
-            
-    def completeTransaction(self,transaction,counterparty):
-        print "completing a transaction: ", transaction," with counterparty:"\
-            ,counterparty,"\n"
-            
-    def abortTransaction(self,transaction,counterparty):
-        print "aborting a transaction: ",transaction," with counterparty:"\
-            ,counterparty,"\n"
-    
-    def loadconfig(self):
-        self.buyerUserName=g("Escrow","buyer_user")
-        self.password=g("Escrow","buyer_pass")
         
     def providePort(self):
         #TODOcode to provide a currently unused port for concurrent transactions

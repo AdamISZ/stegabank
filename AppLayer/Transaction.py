@@ -33,6 +33,10 @@ class Transaction():
     def uniqID(self):
         return hashlib.md5(self.seller+self.buyer+str(self.creationTime)).hexdigest()
     
+    def getRole(self,agentID):
+        if agentID==self.buyer: return 'buyer'
+        elif agentID==self.seller: return 'seller'
+        else: return 'invalid'
     '''    
     #serves for serialization, messaging and debugging, hopefully!
     def __repr__(self):

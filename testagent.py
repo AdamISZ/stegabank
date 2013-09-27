@@ -32,6 +32,7 @@ from AppLayer import Transaction
 from AppLayer import Agent
 from AppLayer import UserAgent
 from AppLayer import EscrowAccessor
+import Messaging.MessageWrapper as Msg
 from NetworkAudit import sharkutils
 import Messaging
 #=====END LIBRARY IMPORTS==========
@@ -53,6 +54,9 @@ if __name__ == "__main__":
     #part in the test.
     
     other = 'seller' if role == 'buyer' else 'buyer'
+    #instantiate a blocking connection to the message queue
+    Msg.instantiateConnection(un=g(role.title(),role+"_rabbitmq_user"),\
+                              pw=g(role.title(),role+"_rabbitmq_pass"))
     
     #instantiate two instances of UserAgent
     myself = UserAgent(g("Directories",role+"_base_dir"),\
@@ -91,6 +95,7 @@ if __name__ == "__main__":
 
     buyer = myself if role=='buyer' else counterparty
     seller = counterparty if role=='buyer' else myself
+    
     #having collected enough info, we're ready to request a transaction:
     myself.activeEscrow.requestTransaction(buyer=buyer,seller=seller, \
                     amount=amount,price=price,curr=myself.baseCurrency)
@@ -101,8 +106,8 @@ if __name__ == "__main__":
     
     #the next step (for both parties) is to wait for confirmation from the remote escrow
     #that the transaction has been accepted as valid
-    if not escrow.getResponseToTxnRq(tx):
-        shared.debug(0,["Timed out waiting for a response from the escrow."])
+    if not myself.activeEscrow.getResponseToTxnRq(tx):
+        shared.debug(0,["Received no intelligible response from escrow.Quitting."])
         exit(1)
     
     #at this stage the escrow and counterparty have confirmed that the
@@ -148,22 +153,43 @@ if __name__ == "__main__":
     
     #if we reached here as seller it means we promise that squid is running.
     #if we reached here as buyer it means we promise to be ready to start banking.
+    
+    #here we set up the pipes for the internet traffic, as long as everything
+    #is in order
+    if not myself.startBankingSession(tx): 
+            shared.debug(0,["Could not start banking session for transaction",\
+                tx.uniqID(),"because this transaction does not belong to you."])
+            exit(1)
+    
     if role=='buyer':
-        myself.startBankingSession(tx)
             
         print "When firefox starts, please perform internet banking." +\
             "\n When you have finished, please close firefox."
         time.sleep(5)
         #start up firefox here TODO
+        ffdir = os.path.dirname(g("Exepaths","firefox_exepath"))
+        ffname = os.path.basename(g("Exepaths","firefox_exepath"))
+        shared.local_command([g("Exepaths","firefox_exepath")],bg=True)
         
+        #TODO: need to set things using a plugin
+        #TODO: insert test session; escrow can check if it can 
+        #receive valid SSL using a test case
         #something to account for the case where the proxy didn't work?
-        shared.wait_for_process_death('firefox')
-        #put some code to get the confirmation of storage from escrow
+        #TODO: this will need some serious 'refactoring'!
+        shared.wait_for_process_death(ffname)
+        
+        #we have finished our banking session. We need to tell the others.
+        myself.activeEscrow.sendConfirmationBankingSessionEnded(tx)
+        
+        #TODOput some code to get the confirmation of storage from escrow
         #(and counterparty?) so as to be sure everything was done right
     else:
         shared.debug(0,["Waiting for signal of end of banking session."])
-        #wait for escrow message
-    
+        
+        #wait for escrow message telling us the buyer's finished
+        if not myself.activeEscrow.waitForBankingSessionEnd(tx): exit(1)
+        shared.debug(0,["The banking session is finished. Exiting."])
+        exit(0)
 
 
 

@@ -49,7 +49,9 @@ class EscrowAccessor(Agent):
         shared.debug(1,["Waiting for messages timed out"])
         return False
     
-    
+    def getSingleMessage(self,timeout):
+        return Msg.getSingleMessage(self.agent.uniqID(),timeout)
+        
     def requestTransaction(self,buyer,seller,amount,price,curr):
         #construct a message to the escrow
         shared.debug(0,["About to request a transaction"])
@@ -81,35 +83,28 @@ class EscrowAccessor(Agent):
     #before returning it.    
     def getResponseToTxnRq(self, tx):
         
-        accepted=0
-        for i in range(1,10):
-            if self.waitForMessages(10): break
-        
-        for k,m in self.messageBuffer.iteritems():
-            if 'TRANSACTION_ACCEPTED:' in m:
-                if 'TRANSACTION_ACCEPTED:'+','.join([tx.buyer,tx.seller,\
+        while True:
+            smsg = self.getSingleMessage(100)
+            if not smsg:
+                shared.debug(0,["timed out waiting for the transaction accept message"])
+                return False
+                         
+            for k,m in smsg.iteritems():
+                if 'TRANSACTION_ACCEPTED:' in m:
+                    if 'TRANSACTION_ACCEPTED:'+','.join([tx.buyer,tx.seller,\
                     str(tx.amount),str(tx.price),tx.currency]) in m:
-                    accepted=1
-                    #we need to have the same creation time as the escrow
-                    #to ensure the same uniqueID; remember Python is pass-by-ref
-                    #so this updates the tx object in the calling script
-                    tx.creationTime = int(m.split(':')[1].split(',')[-1])
-                else:
-                    shared.debug(0,["something very wrong - transaction accepted with wrong parameters!?"])
+                        #we need to have the same creation time as the escrow
+                        #to ensure the same uniqueID; remember Python is pass-by-ref
+                        #so this updates the tx object in the calling script
+                        tx.creationTime = int(m.split(':')[1].split(',')[-1])
+                        shared.debug(1,["Transaction was accepted by escrow."])
+                        return True
+                    else:
+                        shared.debug(0,["message about the wrong transaction ",\
+                                "-ignoring"])
+                elif 'TRANSACTION_REJECTED' in m:
+                    shared.debug(0,["Our transaction was rejected :( - quitting."])
                     exit(1)
-            elif 'TRANSACTION_REJECTED' in m:
-                accepted=-1
-                
-        if accepted==-1:    
-            shared.debug(0,["Our transaction was rejected :( - quitting."])
-            exit(1)    
-        elif accepted==1:
-            shared.debug(1,["Transaction was accepted by escrow."])
-            return True
-            
-        if not accepted:
-            shared.debug(0,["Failed to get the tx message after a long wait."])
-            return False
     
     def requestBankSessionStart(self, tx):
         #construct a message to the escrow
@@ -121,10 +116,12 @@ class EscrowAccessor(Agent):
         
     def getResponseToBankSessionStartRequest(self,tx):
         accepted=0
-        for i in range(1,10):
-            if self.waitForMessages(10): break
+        smsg = self.getSingleMessage(100)
+        if not smsg:
+            shared.debug(0,["timed out waiting for the bank session start accept message"])
+            exit(1)
         
-        for k,m in self.messageBuffer.iteritems():
+        for k,m in smsg.iteritems():
             if 'BANK_SESSION_START_ACCEPTED' in m and tx.uniqID() in k:
                 accepted=1
             elif 'BANK_SESSION_START_REJECTED' in m and tx.uniqID() in k:
@@ -140,7 +137,32 @@ class EscrowAccessor(Agent):
         if not accepted:
             shared.debug(0,["Failed to get the bank session response after a long wait."])
             return False
-
+        
+    def waitForBankingSessionEnd(self,tx):
+        while True:
+            smsg = self.getSingleMessage(100)
+            if not smsg:
+                shared.debug(0,["timed out waiting for the bank session ended message"])
+                return False
+            #put a bit more error checking here
+            for k,m in smsg.iteritems():
+                if 'BANK_SESSION_ENDED' in m:
+                    return True
+    
+    #this message is to be used by buyers only
+    def sendConfirmationBankingSessionEnded(self,tx):
+        #sanity check
+        if tx.getRole(self.agent.uniqID()) != 'buyer':
+            shared.debug(0,["Error: user agent:",self.agent.uniqID(),\
+        "is not the buyer for this transaction and so can't confirm the end",\
+            "of the banking session!"])
             
+        #construct a message to the escrow
+        shared.debug(0,["Sending bank session end confirm to seller and escrow"])
+        tx_rq_key = tx.uniqID()+'.'+self.agent.uniqID()
+        #todo: handle numeric conversions with appropriate accuracy
+        tx_rq_msg = {tx_rq_key:'BANK_SESSION_ENDED'}
+        for recipient in [self.uniqID,tx.seller]:
+            self.sendMessages(tx_rq_msg,recipient)
         
         
