@@ -9,6 +9,7 @@ import helper_startup
 import AppLayer
 from AppLayer import EscrowAgent
 import logging
+import pika
 logging.getLogger('pika').setLevel(logging.DEBUG)
 #=====END LIBRARY IMPORTS==========
 
@@ -18,8 +19,8 @@ if __name__ == "__main__":
     helper_startup.loadconfig()
     
     #In the next section we instantiate the escrow agent object
-    myself = EscrowAgent(g("Directories","escrow_base_dir"),g("Escrow","btc_address"))
-    
+    myself = EscrowAgent(g("Directories","escrow_base_dir"),\
+                    g("Escrow","btc_address"))
     myself.run()
     
 

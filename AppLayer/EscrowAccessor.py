@@ -27,8 +27,13 @@ class EscrowAccessor(Agent):
         
     def sendMessages(self,messages={},recipientID='',transaction=None):
         recipientID = self.uniqID if recipientID == '' else recipientID
+        
+        #this standardised way will work if we have only one message
+        if transaction:
+            messages = {transaction.uniqID()+'.'+self.agent.uniqID():messages.values()[0]}
+        
         shared.debug(0,["About to send a message to",recipientID])
-        return Msg.sendMessages(messages,recipientID=recipientID,server=self.host)
+        return Msg.sendMessages(messages,recipientID=recipientID)
         
     
     #this method collects all messages addressed to the user specified
@@ -84,7 +89,7 @@ class EscrowAccessor(Agent):
     def getResponseToTxnRq(self, tx):
         
         while True:
-            smsg = self.getSingleMessage(100)
+            smsg = self.getSingleMessage(timeout=1000)
             if not smsg:
                 shared.debug(0,["timed out waiting for the transaction accept message"])
                 return False
@@ -97,11 +102,16 @@ class EscrowAccessor(Agent):
                         #to ensure the same uniqueID; remember Python is pass-by-ref
                         #so this updates the tx object in the calling script
                         tx.creationTime = int(m.split(':')[1].split(',')[-1])
+                        tx.state='INITIALISED'
                         shared.debug(1,["Transaction was accepted by escrow."])
+                        #the transaction should now be added to the persistent
+                        #store;
+                        self.agent.transactions.append(tx)
+                        self.agent.pT()
                         return True
                     else:
-                        shared.debug(0,["message about the wrong transaction ",\
-                                "-ignoring"])
+                        shared.debug(0,["message about the wrong transaction:",\
+                                k,m,"-ignoring"])
                 elif 'TRANSACTION_REJECTED' in m:
                     shared.debug(0,["Our transaction was rejected :( - quitting."])
                     exit(1)
@@ -116,7 +126,7 @@ class EscrowAccessor(Agent):
         
     def getResponseToBankSessionStartRequest(self,tx):
         accepted=0
-        smsg = self.getSingleMessage(100)
+        smsg = self.getSingleMessage(timeout=1000)
         if not smsg:
             shared.debug(0,["timed out waiting for the bank session start accept message"])
             exit(1)
@@ -132,6 +142,8 @@ class EscrowAccessor(Agent):
             exit(1)    
         elif accepted==1:
             shared.debug(1,["Bank session was accepted by escrow."])
+            tx.state='IN_PROCESS'
+            self.agent.pT()
             return True
             
         if not accepted:
@@ -140,11 +152,12 @@ class EscrowAccessor(Agent):
         
     def waitForBankingSessionEnd(self,tx):
         while True:
-            smsg = self.getSingleMessage(100)
+            smsg = self.getSingleMessage(1000)
             if not smsg:
                 shared.debug(0,["timed out waiting for the bank session ended message"])
                 return False
             #put a bit more error checking here
+            shared.debug(0,["Got this message:",smsg])
             for k,m in smsg.iteritems():
                 if 'BANK_SESSION_ENDED' in m:
                     return True
@@ -164,5 +177,34 @@ class EscrowAccessor(Agent):
         tx_rq_msg = {tx_rq_key:'BANK_SESSION_ENDED'}
         for recipient in [self.uniqID,tx.seller]:
             self.sendMessages(tx_rq_msg,recipient)
+    
+    def sendInitiateL1DisputeRequest(self, tx):
+        msg = {tx.uniqID()+'.'+self.agent.uniqID():'DISPUTE_L1_REQUEST'}
+        self.sendMessages(msg)
+    
+    def waitForSSLDataRequest(self, tx):
+        accepted=0
+        while True:
+            smsg = self.getSingleMessage(timeout=100)
+            if not smsg:
+                continue
+            shared.debug(0,["Got a message requesting data"])
+            for k,m in smsg.iteritems():
+                shared.debug(0,["Heres the message:",k,m])
+                if 'SSL_DATA_REQUEST' in m and tx.uniqID() in k:
+                    return True
         
-        
+    def getL1Adjudication(self,tx):
+        while True:
+            amsg = self.getSingleMessage(timeout=1000)
+            if not amsg:
+                continue
+            for k,m in amsg.iteritems():
+                if 'DISPUTE_L1_ADJUDICATION_FAILURE' in m:
+                    shared.debug(0,["The escrow-oracle failed to reach a",\
+    "decision. The case has been elevated to human escrow adjudication."])
+                    return ['no result','adjudication failure']
+                elif 'DISPUTE_L1_ADJUDICATION' in m:
+                    shared.debug(0,["The escrow-oracle successfully reached",\
+    "a decision and made an award."])
+                    return m.split(':')[-1].split(',')

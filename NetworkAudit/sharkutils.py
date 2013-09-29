@@ -159,7 +159,15 @@ def mergecap(outfile,infiles,dir=False):
         args.extend(infiles)
     shared.debug(0,["mergecap call is:",args])
     try:
-        return subprocess.check_output(args)
+        #bug discovered 29 Sep 2013: wildcards don't get read in Unix without
+        #passing through the shell interpreter - does this muck up Windows?
+        if shared.OS=='Windows':
+            return subprocess.check_output(args)
+        elif shared.OS=='Linux':
+            return subprocess.check_output(' '.join(args),shell=True)
+        else:
+            print "Unrecognised OS"
+            exit(1)
     except:
         shared.debug(0,["Error in mergecap execution, quitting!"])
         exit(1)

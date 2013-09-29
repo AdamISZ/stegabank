@@ -25,23 +25,24 @@ EXCN = 'ssllog_main'
 #rely on its contents!
 response={}
 
-conn = None
+chan = None
 #+++++++++++++++++++++++++++++++++++
 
 def instantiateConnection(un='guest',pw='guest'):
-    global conn
+    global chan
     try:
         pp = 'amqp://'+un+':'+pw+'@'+\
         g("Escrow","escrow_host")+':'+g("Escrow","rabbitmq_port")+'/%2f'
         shared.debug(0,["Set parameter string to:",pp])
         parameters = pika.URLParameters(pp)
         conn = pika.BlockingConnection(parameters)
+        chan = conn.channel()
     except:
         #TODO handle connection failure gracefully
         shared.debug(0,["Critical error: cannot connect to host:",\
                     g("Escrow","escrow_host")])
         exit(1)
-        
+
         
 #interface: the arguments must be:
 #messages - a dict of form {'topic':'message','topic':'message',..}
@@ -49,13 +50,11 @@ def instantiateConnection(un='guest',pw='guest'):
 #be used to choose the correct queue/binding in rabbit MQ. The message format is
 #specified in MessageRules.txt in this directory.
 #server - the IP address of the host on which the rabbitMQ server is running
-def sendMessages(messages={},recipientID='escrow',server='',un='guest',passwd='guest'):
-    global conn    
+def sendMessages(messages={},recipientID='escrow'):
+    global chan    
     #todo: error handling in this function
     shared.debug(1,["Attempting to send message(s): \n",messages,\
                         " to recipient: ",recipientID,'\n'])
-        
-    chan = conn.channel()
     
     #26 Sep 2013: the model which best fits simple message seems
     #to be declaration of static queues for each route (see 1st tutorial on 
@@ -65,9 +64,7 @@ def sendMessages(messages={},recipientID='escrow',server='',un='guest',passwd='g
     #a routing key with no current consumers, the message just drops into
     #the void.
     chan.queue_declare(recipientID)
-        
-    #notice we don't need to declare a queue; we're letting the exchange
-    #figure out the right queues to publish to based on the topic
+    
     for hdr,msg in messages.iteritems():
         shared.debug(0,["about to send a message:"])
         chan.basic_publish(exchange='',\
@@ -76,12 +73,12 @@ def sendMessages(messages={},recipientID='escrow',server='',un='guest',passwd='g
     return True
 
 def getSingleMessage(recipientID,timeout=30):
-    global conn    
-    chan = conn.channel()
+    global chan 
     chan.queue_declare(queue=recipientID)
     for i in range(1,timeout):
         time.sleep(1)
-        method_frame,header_frame,body = chan.basic_get(queue=recipientID)
+        method_frame,header_frame,body = chan.basic_get(queue=recipientID,\
+                                                        no_ack=True)
         if not method_frame:
             continue
         else:
@@ -97,15 +94,13 @@ def getSingleMessage(recipientID,timeout=30):
 #recipientID - the unique ID of the agent who receives all messages for them
 #all messages will be returned in a dict for processing
 def collectMessages(recipientID):
-    global conn
+    global chan
            
     #parse the argument into a set of routing keys
     #todo: understand the rule of this better - may need to change
     routing_keys = [recipientID]
         
     global response
-        
-    chan = conn.channel()
         
     #see equiv in sendMessages
     chan.queue_declare(recipientID)

@@ -33,7 +33,7 @@ class UserAgent(Agent.Agent):
         runID='_'.join([role,transaction.uniqID(),'banksession'])
         d = shared.makedir([g("Directories",role+'_base_dir'),runID])
         #make the directories for the stcp logs
-        new_stcp_dir=shared.makedir([d,'stcp_buyer'])
+        new_stcp_dir=shared.makedir([d,'stcplog'])
         
         shared.debug(0,["starting banking session as ",role,"\n"])
         

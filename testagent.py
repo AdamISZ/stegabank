@@ -37,35 +37,16 @@ from NetworkAudit import sharkutils
 import Messaging
 #=====END LIBRARY IMPORTS==========
 
-if __name__ == "__main__":
-    #Load all necessary configurations:
-    #========================
-    helper_startup.loadconfig()
+def do_transaction(myself, role):
     
-    parser = argparse.ArgumentParser(description='ssllog user agent script')
-    parser.add_argument('role',help="role, either \'buyer\' or \'seller\'")
-    args = parser.parse_args()
-    role = args.role.lower()
-    if role not in ['buyer','seller']:
-        shared.debug(0,["invalid role string provided, quitting."])
-        exit(1)
-        
-    #In the next section we instantiate the agents which are going to take
-    #part in the test.
+    other = 'buyer' if role == 'seller' else 'seller'
     
-    other = 'seller' if role == 'buyer' else 'buyer'
-    #instantiate a blocking connection to the message queue
-    Msg.instantiateConnection(un=g(role.title(),role+"_rabbitmq_user"),\
-                              pw=g(role.title(),role+"_rabbitmq_pass"))
-    
-    #instantiate two instances of UserAgent
-    myself = UserAgent(g("Directories",role+"_base_dir"),\
-        g(role.title(),"btc_address"),g(role.title(),"bank_information"),\
-        g(role.title(),"base_currency"))
- 
     counterparty = UserAgent(g("Directories",other+"_base_dir"),\
         g(other.title(),"btc_address"),g(other.title(),"bank_information"),\
         g(other.title(),"base_currency"))
+    
+    buyer = myself if role=='buyer' else counterparty
+    seller = counterparty if role=='buyer' else myself
     
     #initialize a fixed escrow -this is for testing; in prod
     #we need ability to dynamically use different escrows
@@ -83,8 +64,7 @@ if __name__ == "__main__":
     #use the command line to drive; ask the user what they want to do: buy/sell
     #and how much
     try:
-        role = shared.get_binary_user_input("Do you want to buy or sell? [B/S]",\
-                                            'b','buyer','s','seller')
+        
         amount = shared.get_validated_input("Enter amount to trade: ",float)
         price = shared.get_validated_input("Enter worst acceptable price in "+\
                                         myself.baseCurrency+" per BTC: ",float)
@@ -92,18 +72,13 @@ if __name__ == "__main__":
     except:
         shared.debug(0,["Error in command line agent execution. Quitting!"])
         exit(1)
-
-    buyer = myself if role=='buyer' else counterparty
-    seller = counterparty if role=='buyer' else myself
-    
-    #having collected enough info, we're ready to request a transaction:
-    myself.activeEscrow.requestTransaction(buyer=buyer,seller=seller, \
-                    amount=amount,price=price,curr=myself.baseCurrency)
     
     #make a temporary transaction object with our data to cross check 
     #with escrow response
     tx = Transaction(buyer.uniqID(),seller.uniqID(),amount,price,buyer.baseCurrency)
-    
+    #having collected enough info, we're ready to request a transaction:
+    myself.activeEscrow.requestTransaction(buyer=buyer,seller=seller, \
+                    amount=amount,price=price,curr=myself.baseCurrency)
     #the next step (for both parties) is to wait for confirmation from the remote escrow
     #that the transaction has been accepted as valid
     if not myself.activeEscrow.getResponseToTxnRq(tx):
@@ -137,7 +112,7 @@ if __name__ == "__main__":
 "state, waiting for you to conduct the banking session later.",'y','y','n','n')
             if rspns=='y':
                 myself.escrow.sendTransactionAbortInstruction(tx)
-            exit(0)
+            
     else:        
         rspns = shared.get_binary_user_input("Enter Y/y to start banking session",\
                                         'y','y','n','n')
@@ -149,7 +124,7 @@ if __name__ == "__main__":
 "state, waiting for you to conduct the banking session later.",'y','y','n','n')
             if rspns=='y':
                 myself.escrow.sendTransactionAbortInstruction(tx)
-            exit(0)
+            
     
     #if we reached here as seller it means we promise that squid is running.
     #if we reached here as buyer it means we promise to be ready to start banking.
@@ -180,28 +155,91 @@ if __name__ == "__main__":
         
         #we have finished our banking session. We need to tell the others.
         myself.activeEscrow.sendConfirmationBankingSessionEnded(tx)
-        
+        #if we shut down python immediately the connection is dropped 
+        #and the message gets dropped! Ouch, what a bug!TODO
+        time.sleep(10)
         #TODOput some code to get the confirmation of storage from escrow
         #(and counterparty?) so as to be sure everything was done right
     else:
         shared.debug(0,["Waiting for signal of end of banking session."])
         
-        #wait for escrow message telling us the buyer's finished
+        #wait for message telling us the buyer's finished
         if not myself.activeEscrow.waitForBankingSessionEnd(tx): exit(1)
         shared.debug(0,["The banking session is finished. Exiting."])
-        exit(0)
+        
+
+def do_dispute(myself,role):
+    
+    escrow = EscrowAccessor(host=g("Escrow","escrow_host"),agent=myself,\
+    username=g(role.title(),"escrow_ssh_user"),\
+    password=g(role.title(),"escrow_ssh_pass"),\
+        port=g(role.title(),"escrow_input_port"),escrowID='123') 
+        
+    #activate the locally instantiated EscrowAccessor object
+    myself.addEscrow(escrow).setActiveEscrow(escrow)
+    
+    myself.printCurrentTransactions()
+    tnum = shared.get_validated_input("Choose a transaction to dispute:",int)
+    tx = myself.transactions[tnum]
+        
+    #a hack for testing
+    rspns =shared.get_binary_user_input("Are you the disputer?",'y','y','n','n')
+    
+    if rspns=='y':
+        shared.debug(0,["Sending dispute request"])
+        escrow.sendInitiateL1DisputeRequest(tx)
+
+    #wait for escrow to ask for the data
+    escrow.waitForSSLDataRequest(tx)
+    
+    #send the ssl data - we use the 'on the fly' method of formatting the message
+    #noting that the escrow accessor can reset the message key correctly
+    #based on the transaction passed, and always sends to the escrow by default
+    escrow.sendMessages(messages={'x':'SSL_DATA_SEND:'+\
+                                ','.join(myself.getHashList(tx))},transaction=tx)
+
+    #wait for the escrow to respond with adjudication
+    adjudication = escrow.getL1Adjudication(tx)
+
+    shared.debug(0,["The result of adjudication was:\n The bitcoins were",\
+    "awarded to:",adjudication[0],"for this reason:",adjudication[1]])
+    time.sleep(4)
+    exit(0)
 
 
 
-
-
-
-
-
-
-
-
-
-
+if __name__ == "__main__":
+    #Load all necessary configurations:
+    #========================
+    helper_startup.loadconfig()
+    role = shared.get_binary_user_input("Do you want to buy or sell? [B/S]",\
+                                            'b','buyer','s','seller')
+    
+    #instantiate two instances of UserAgent
+    myself = UserAgent(g("Directories",role+"_base_dir"),\
+        g(role.title(),"btc_address"),g(role.title(),"bank_information"),\
+        g(role.title(),"base_currency"))
+    
+    #instantiate a blocking connection to the message queue
+    Msg.instantiateConnection(un=g(role.title(),role+"_rabbitmq_user"),\
+                              pw=g(role.title(),role+"_rabbitmq_pass"))
+    
+    #start with a menu
+    ans=True
+    while ans:
+        print ("""Please choose an option:
+        [1] List current transactions
+        [2] Start a new transaction
+        [3] Dispute an existing transaction
+        """)
+        choice = shared.get_validated_input("Enter an integer:",int)
+        if choice==1:
+            myself.printCurrentTransactions()
+        elif choice == 2:
+            do_transaction(myself,role)
+        elif choice == 3:
+            do_dispute(myself,role)
+        else:
+            print "invalid choice. Try again."
 
 

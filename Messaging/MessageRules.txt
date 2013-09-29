@@ -29,10 +29,14 @@ TRANSACTION_ABORT - no data
 TRANSACTION_ABORT_ACCEPTED - no data
 TRANSACTION_ABORT_REJECTED - data are: reason
 BANK_SESSION_START_REQUEST - no data
+BANK_SESSION_START_READY - no data
 BANK_SESSION_START_ACCEPTED - no data
 BANK_SESSION_START_REJECTED - data are: reason
 BANK_SESSION_ENDED - no data
 BANK_SESSION_ABORT - no data
-DISPUTE_REQUEST - data are: reason for request,..
-DISPUTE_ADJUDICATION - data are: agent awarded to, reason for award
+DISPUTE_L1_REQUEST - data are: reason for request,..
+SSL_DATA_REQUEST - data are: no data
+SSL_DATA_SEND - data are: hash1,hash2,..
+DISPUTE_L1_ADJUDICATION_FAILURE - data are: reason for failure
+DISPUTE_L1_ADJUDICATION - data are: agent awarded to, reason for award
 <TBC>
