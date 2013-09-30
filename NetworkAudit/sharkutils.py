@@ -189,11 +189,6 @@ def get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list):
         
     return list(set(ssl_hashes))
     
-
-#this function is only going to extract the hashes of the encrypted SSL data
-#which has been reassembled, to avoid possible issues with segmentation
-#of data being different between buyer and seller (i.e. try to ignore any
-#TCP-and-above issues as they may differ between buyer and seller)
 #4 Sep 2013 rewrite to use stcppipe instead of gateway bouncing
 #The first argument CAPFILE can take one of two possible forms:
 #either the full path of a single pcap file (if captured using dumpcap)
@@ -276,7 +271,347 @@ def get_ssl_hashes_from_capfile(capfile,port=-1,stream='',options=[],frames=[]):
     ,len(ssl_app_data_list)])
     
     return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
+
+
+
+def get_hashes_to_ignore(stcpdir,magic_hashes):
+    if not any(magic_hashes):
+        return None
+    unsafe_hashes=[]
+    for file in os.listdir(stcpdir):
+        frames_hashes = get_frames_hashes(file)
+        bad_frames=[]
+        for frame,hashes in frames_hashes.iteritems():
+            if set(magic_hashes).intersection(set(hashes)):
+                #mark frame as bad
+                bad_frames.append(frame)
+        #we now have a list of all 'bad' frames in this stream/file
+        #it should just be one frame - the last GET
+        if len(bad_frames)>1:
+            shared.debug(0,["Unexpected case - more than one 'bad' frame",
+                            "in the escrow log."])
+            exit(1)
+        #append all hashes in SUCCEEDING frames to the ignorable list
+        unsafe_hashes.extend([item for sublist in \
+        [v for k,v in frames_hashes.iteritems() if k>bad_frames[0]] \
+        for item in sublist])
+    return list(set(unsafe_hashes))
+   
+#allow a user agent, acting as buyer, to list all ssl hashes of GET
+#requests which were not successfully served. It is safe to allow the buyer
+#to deny knowledge of the response, because it is his POSITIVE claim of data
+#that he CAN decrypt that is the basis of his proof of sending. (Think about it..)        
+def get_magic_hashes(stcpdir,keyfile,port):
     
+    #this data structure will contain ALL GET requests performed under SSL
+    #for this banking session
+    GETs=[]
+    
+    #these magic hashes will be sent to escrow; when escrow finds them
+    #in his hash list, he will dump all following hashes in that stream.
+    #(Detailed explanation of reason deferred to later TODO)
+    magic_hashes = []
+
+    for capfile in os.listdir(stcpdir):
+        
+        GET_dict = get_GET_http_requests(os.path.join(stcpdir,capfile),keyfile)
+        
+        if not any(GET_dict):
+            #this happens if the stream doesn't contain SSL; just ignore it
+            continue
+        
+        GETs.append(GET_dict)
+        #this element of the list 'GETs' corresponds to one file, which means
+        #one stream out of stcp. It is a dict which maps
+        #frame numbers as keys to GET requests as strings.
+        #We could conceivably act differently based on some string matching in
+        #the GET, in particular related to the content type that's being requested
+        #However the simplest action to take is to use tshark to check if 
+        #any HTTP content was returned AFTER the LAST GET in the stream. If not,
+        #we mark the hash of the GET request frame as magic, and then pass these
+        #magic hashes to escrow, who knows to ignore all hashes that occur after
+        #it in that stream.
+        
+        #get the highest frame number in the dict
+        highest_frame = max(GET_dict,key=GET_dict.get)
+        #check for no http-content-type after: this is the signal that
+        #the connection was dropped, and we cannot assume the other parties
+        #in proxying did NOT get the response.
+        fs = 'ssl and http.content_type and (frame.number gt '+highest_frame+')'
+        if not tshark(file=capfile,filter=fs,field='frame.number'):
+            #get the ssl hashes of that frame
+            ssl_hashes = get_ssl_hashes_from_capfile(capfile,\
+                        port=port,frames=[highest_frame],options=options)
+            #append it to magic_hashes
+            magic_hashes.extend(ssl_hashes)
+            
+    shared.debug(4,["Here is the full printout of the GET requests:",GETs])
+    return magic_hashes
+    
+#30 Sep 2013 from dansmith; not being used at the moment except for reference
+#look at tshark's ascii dump to better understand the parsing taking place
+def get_html_hash_from_ascii_dump(ascii_dump):
+    hexdigits = shared.hexdigits
+    binary_html = bytearray()
+
+    if ascii_dump == '':
+        print 'empty frame dump'
+        cleanup_and_exit()
+        return
+
+    #We are interested in "Uncompressed entity body" for compressed HTML. If not present, then
+    #the very last entry of "De-chunked entity body" for no-compression no-chunks HTML. If not present, then
+    #the very last entry of "Reassembled SSL" for no-compression no-chunks HTML in multiple SSL segments (very rare),
+    #and finally, the very last entry of "Decrypted SSL data" for no-compression no-chunks HTML in a single SSL segment.
+    already_found = False
+    dechunked_pos = -1
+    reassembled_pos = -1
+    decrypted_pos = -1
+    uncompr_pos = ascii_dump.rfind('Uncompressed entity body')
+    if uncompr_pos != -1:
+        already_found = True
+        for line in ascii_dump[uncompr_pos:].split('\n')[1:]:
+            #convert ascii representation of hex into binary so long as first 4 chars are hexdigits
+            if all(c in hexdigits for c in line [:4]):
+                m_array = bytearray.fromhex(line[6:54])
+                binary_html += m_array
+            else:
+                break
+            
+    if uncompr_pos == -1 and not already_found:
+        dechunked_pos = ascii_dump.rfind('De-chunked entity body')
+        if dechunked_pos != -1:
+            already_found = True
+            for line in ascii_dump[dechunked_pos:].split('\n')[1:]:
+                #convert ascii representation of hex into binary
+                #only deal with lines where first 4 chars are hexdigits
+                if all(c in hexdigits for c in line [:4]):
+                    m_array = bytearray.fromhex(line[6:54])
+                    binary_html += m_array
+                else:
+                    break
+                
+    if dechunked_pos == -1 and not already_found:
+        reassembled_pos = ascii_dump.rfind('Reassembled SSL')
+        if reassembled_pos != -1:
+            already_found = True
+            #skip the HTTP header and find where the HTTP body starts
+            #The delimiter of header from body '0d 0a 0d 0a' can be spanned over two lines
+            #Hence the workaround
+            
+            lines = ascii_dump[reassembled_pos:].split('\n')
+            line_length = len(lines[1])+1
+            line_numbering_length = len(lines[1].split()[0])
+            hexlist = [line.split()[1:17] for line in lines[1:]]
+            #flatten the nested lists acc.to http://stackoverflow.com/questions/952914/making-a-flat-list-out-of-list-of-lists-in-python
+            flathexlist = [item for sublist in hexlist for item in sublist]
+            #convert the list into a single string
+            hexstring = ''.join(flathexlist)
+            print hexstring
+            start_pos_in_hex = hexstring.find('0d0a0d0a')+len('0d0a0d0a')
+            #Knowing that there are 16 2-char hex numbers in a single line, calculate absolute position
+            start_line_in_ascii = start_pos_in_hex/32
+            line_offset_in_ascii = (start_pos_in_hex % 32)/2
+                     
+            #The very first hex is line numbering,it is followed by 2 spaces
+            #each hex number in a line takes up 2 alphanum chars + 1 space char
+            #we skip the very first line 'Reassembled SSL ...' by finding a newline.
+            newline_offset = ascii_dump[reassembled_pos:].find('\n')
+            body_start = reassembled_pos+newline_offset+1+start_line_in_ascii*line_length+line_numbering_length+2+line_offset_in_ascii*3
+            if body_start == -1:
+                print 'Could not find HTTP body'
+                cleanup_and_exit()
+                return
+            lines = ascii_dump[body_start:].split('\n')
+            #treat the first line specially
+            binary_html += bytearray.fromhex(lines[0][:-16])
+            for line in lines[1:]:
+                #convert ascii representation of hex into binary
+                #only deal with lines where first 4 chars are hexdigits
+                if all(c in hexdigits for c in line [:4]):
+                    m_array = bytearray.fromhex(line[6:54])
+                    binary_html += m_array
+                else:
+                    break
+                
+    if reassembled_pos == -1 and not already_found:
+        decrypted_pos = ascii_dump.rfind('Decrypted SSL data')
+        if decrypted_pos != -1:
+            already_found = True
+            #skip the HTTP header and find where the HTTP body starts
+            #The delimiter of header from body '0d 0a 0d 0a' can be spanned over two lines
+            #Hence the workaround
+            
+            lines = ascii_dump[decrypted_pos:].split('\n')
+            line_length = len(lines[1])+1
+            line_numbering_length = len(lines[1].split()[0])
+            hexlist = [line.split()[1:17] for line in lines[1:]]
+            #flatten the nested lists acc.to http://stackoverflow.com/questions/952914/making-a-flat-list-out-of-list-of-lists-in-python
+            flathexlist = [item for sublist in hexlist for item in sublist]
+            #convert the list into a single string
+            hexstring = ''.join(flathexlist)
+            start_pos_in_hex = hexstring.find('0d0a0d0a')+len('0d0a0d0a')
+            #Knowing that there are 16 2-char hex numbers in a single line, calculate absolute position
+            start_line_in_ascii = start_pos_in_hex/32
+            line_offset_in_ascii = (start_pos_in_hex % 32)/2
+                     
+              #The very first hex is line numbering,it is followed by 2 spaces
+            #each hex number in a line takes up 2 alphanum chars + 1 space char
+            #we skip the very first line 'Reassembled SSL ...' by finding a newline.
+            newline_offset = ascii_dump[decrypted_pos:].find('\n')
+            body_start = decrypted_pos+newline_offset+1+start_line_in_ascii*line_length+line_numbering_length+2+line_offset_in_ascii*3
+            
+            if body_start == -1:
+                print 'Could not find HTTP body'
+                cleanup_and_exit()
+                return
+            lines = ascii_dump[body_start:].split('\n')
+            #treat the first line specially
+            binary_html += bytearray.fromhex(lines[0][:-16])
+            for line in lines[1:]:
+                #convert ascii representation of hex into binary
+                #only deal with lines where first 4 chars are hexdigits
+                if all(c in hexdigits for c in line [:4]):
+                    m_array = bytearray.fromhex(line[6:54])
+                    binary_html += m_array
+                else:
+                    break
+                    
+    if decrypted_pos == -1 and not already_found:
+        #
+        #
+        #TODO Fix a corner case where strings being searched are spanned over two lines
+        #
+        #
+        
+        #example.org's response going through squid ends up as ungzipped, unchunked HTML
+        page_end = ascii_dump.rfind('.\n\n')
+        if page_end == -1:
+            print "Could not find page's end"
+            return 0
+        
+        page_start = ascii_dump.rfind('0d 0a 0d 0a')
+        #skip the HTTP header and find where the HTTP body starts
+        #The delimiter of header from body '0d 0a 0d 0a' can be spanned over two lines
+        #Hence the workaround
+        
+        lines = ascii_dump.split('\n')
+        hexlist = [line.split()[1:17] for line in lines]
+        #flatten the nested lists acc.to http://stackoverflow.com/questions/952914/making-a-flat-list-out-of-list-of-lists-in-python
+        flathexlist = [item for sublist in hexlist for item in sublist]
+        #convert the list into a single string
+        hexstring = ''.join(flathexlist)
+        delimiter_pos = hexstring.rfind('0d0a0d0a')
+        if delimiter_pos == -1:
+            print "Could not find page's start"
+            return 0
+        start_pos_in_hex = delimiter_pos +len('0d0a0d0a')
+        #Knowing that there are 16 2-char hex numbers in a single line, calculate absolute position
+        start_line_in_ascii = start_pos_in_hex/32
+        line_offset_in_ascii = (start_pos_in_hex % 32)/2
+        #an ascii line is 73 chars long, each hex number takes up 2 alphanum chars + 1 space char
+        #There are 6 line number chars (including spaces) at the start of each line
+        page_start = start_line_in_ascii*73+6+line_offset_in_ascii*3
+              
+        if page_end < page_start:
+            print "Could not find HTML page"
+            return 0
+        lines = ascii_dump[page_start:page_end+len('.\n\n')].split('\n')
+        #treat the first line specially
+        binary_html += bytearray.fromhex(lines[0][:-16])
+        for line in lines[1:]:
+            #convert ascii representation of hex into binary
+            #only deal with lines where first 4 chars are hexdigits
+            if all(c in hexdigits for c in line [:4]):
+                m_array = bytearray.fromhex(line[6:54])
+                binary_html += m_array
+            else:
+                break
+    print binary_html
+    if len(binary_html) == 0:
+        print 'empty binary array'
+        
+        return
+    #FF's view source (against which we are comparing) makes certain changes to the original HTML. It replaces
+    # '\r\n' with '\n'
+    #and '\r' with '\n'
+    binary_html2 = binary_html.replace('\r\n','\n')
+    binary_html3 = binary_html2.replace('\r','\n')
+    return hashlib.md5(binary_html3).hexdigest()
+
+#30 Sep 2013:This is a based mainly on dansmith's get_html_from_ascii_dump. 
+#Here, given a particular capfile, we want to find the frame numbers
+#of all GET requests; they're located using the hex/ascii dump (-x) feature 
+#NOTE that inorder to work, you must provide this function with the correct
+#ssl key log file in the keyfile argument
+#Both the frame number and the GET request string are returned
+def get_GET_http_requests(capfile,keyfile):
+    hexdigits = shared.hexdigits
+    options=['ssl.keylog_file:'+keyfile]
+    frames_list = shared.pisp(tshark(capfile,filter='ssl and http.request',\
+                                     field='frame.number',options=options))
+    #data structure to store all the GETs found:
+    if not any(frames_list): return None
+    GETs = {}
+    for frame in frames_list:
+        binary_html = bytearray()
+        #TODO: this is too slow as it calls tshark many many times
+        #(and with decryption enabled which REALLY slows it down) - 
+        #we will have to find a way
+        #to parse -x output for all frames at once, but it will be nasty!
+        ascii_dump = tshark(capfile,frames=[frame],field='x',options=options)
+        if ascii_dump == '':
+            shared.debug(0,['empty frame dump'])
+            return
+        #the section we're looking for will usually start "Reassembled SSL.."
+        #but if no reassembly was necessary, it will start with "Decrypted.."
+        #(requests are not ever compressed AFAIK, although the technology exists)
+        #TODO check this?
+        reassembled_pos = ascii_dump.rfind('Reassembled SSL')
+        if reassembled_pos == -1:
+            reassembled_pos = ascii_dump.rfind('Decrypted SSL')
+            
+        if reassembled_pos != -1:
+            lines = ascii_dump[reassembled_pos:].split('\n')
+            line_length = len(lines[1])+1
+            line_numbering_length = len(lines[1].split()[0])
+            hexlist = [line.split()[1:17] for line in lines[1:]]
+            #flatten the nested lists acc.to http://stackoverflow.com/\
+            #questions/952914/making-a-flat-list-out-of-list-of-lists-in-python
+            flathexlist = [item for sublist in hexlist for item in sublist]
+            #convert the list into a single string
+            hexstring = ''.join(flathexlist)
+            #modified to read GET headers 
+            start_pos_in_hex = 0
+                     
+            #The very first hex is line numbering,it is followed by 2 spaces
+            #each hex number in a line takes up 2 alphanum chars + 1 space char
+            #we skip the very first line 'Reassembled SSL ...' by finding a newline.
+            newline_offset = ascii_dump[reassembled_pos:].find('\n')
+            
+            body_start = reassembled_pos+newline_offset+1+line_numbering_length+2
+            lines = ascii_dump[body_start:].split('\n')
+            #treat the first line specially
+            #TODO why is this necessary?(esp. why is it different from html case)
+            binary_html += bytearray.fromhex(lines[0][0:48])
+            for line in lines[1:]:
+                #convert ascii representation of hex into binary
+                #only deal with lines where first 4 chars are hexdigits
+                if all(c in hexdigits for c in line [:4]):
+                    m_array = bytearray.fromhex(line[6:54])
+                    binary_html += m_array
+                else:
+                    break
+            if len(binary_html) == 0:
+                shared.debug(0,['empty binary array'])
+                return    
+            #we now have the entire request stored in binary_html; check for GET
+            if binary_html.find('GET') ==0:
+                GETs[frame]=str(binary_html)
+                
+    #now we have all frames with gets in a list of dicts frame num: request
+    return GETs
+
 #===============================================================================
 #Functions for debugging purposes
 #===============================================================================
@@ -412,10 +747,13 @@ def debug_find_mismatch_frames(capfile1, port1, stcp_flag1,capfile2, \
 
 #designed to return a dict of all hashes per frame, optionally
 #filtered by stream
-def get_frames_hashes(capfile,port,stream='',options=[]):    
+def get_frames_hashes(capfile,port='',stream='',options=[]):    
     frames_hashes = {}
     #Run tshark once to get a list of frames with ssl app data in them
-    filterstr = 'ssl.record.content_type==23 and tcp.port=='+str(port)
+    filterstr = 'ssl.record.content_type==23'
+    if (port):
+        filterstr += ' and tcp.port=='+str(port)
+    
     if (stream):
         filterstr += (' and tcp.stream==' + stream)
     try:

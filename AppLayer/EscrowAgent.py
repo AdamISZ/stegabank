@@ -82,6 +82,10 @@ class EscrowAgent(Agent.Agent):
                 elif 'SSL_DATA_SEND' in m:
                     shared.debug(0,["Found a ssl data transfer in the buffer"])
                     self.receiveSSLHashes({k:m})
+                
+                elif 'SSL_DATA_SEND_MAGIC' in m:
+                    shared.debug(0,["Found a magic hashes method in the buffer"])
+                    self.receiveSSLMagicHashes({k:m})
                     
     #for this function we use "instruction" rather than
     #"request" because users should be able to cancel WITHOUT
@@ -289,7 +293,8 @@ class EscrowAgent(Agent.Agent):
                 shared.debug(0,["Serious error - message of type:",\
             msg.values()[0].split(':')[0],"instead of SSL_DATA_SEND"])
                 return False  
-              
+        #check the role as behaviour depends on it
+        role = tx.getRole(sender)
         response=[]
         
         shared.debug(0,["starting receiveSSLHashes"])
@@ -297,7 +302,15 @@ class EscrowAgent(Agent.Agent):
         shared.debug(0,["set the sender to : ",sender])
         
         #this is a list of all the hashes
-        hash_data = msg.values()[0].split(':')[-1].split(',')
+        #buyers send magic hashes after '^' so:
+        sent_data = msg.values()[0].split(':')[-1]
+        if role=='buyer':
+            hash_data_string,magic_hashes_string=sent_data.split('^')
+            #v important: magic_hashes very likely to be null
+            hash_data = hash_data_string.split(',')
+            magic_hashes = magic_hashes_string.split(',')
+        else:
+            hash_data = sent_data.split(',')
         
         #establish in advance which transaction this data refers to
         tmptx = filter(lambda a: a.uniqID()==txID,self.transactions)[0]
@@ -307,12 +320,10 @@ class EscrowAgent(Agent.Agent):
                             " not stored on the escrow!"])
             exit(1)
         
+        
         for k,m in self.hashStore.iteritems():
             tmptxID, tmpsender = k.split('.')
             tmphashdata = m.split(':')[-1].split(',')
-            #ignore the current
-            if {k,m} == msg:
-                continue
             #parse the data in the message
             #we need to find out if the counterparty has sent a corresponding
             #data set
@@ -322,31 +333,63 @@ class EscrowAgent(Agent.Agent):
                 rmsg = {txID+'.'+self.escrowID:'SSL_DATA_RECEIVED'}
                 self.sendMessages(rmsg,sender)
                 
-                buyer_hashes = tmphashdata if tmptx.getRole(tmptxID)=='buyer' else hash_data
-                seller_hashes = tmphashdata if tmptx.getRole(tmptxID)=='seller' else hash_data
+                buyer_hashes = tmphashdata if tmptx.getRole(tmptxID)=='buyer'\
+                    else hash_data
+                seller_hashes = tmphashdata if tmptx.getRole(tmptxID)=='seller'\
+                    else hash_data
                 
-                self.adjudicateL1Dispute(tmptx,tmptx.buyer,buyer_hashes,tmptx.seller,seller_hashes)
+                #to decide which magic_hashes to send to adjudication, we can't
+                #use something like "if magic_hashes" because it's perfectly
+                #normal for it to be None. 
+                if role=='buyer':
+                    sent_magic_hashes = magic_hashes
+                else:
+                    sent_magic_hashes = self.magicStore[txID+'.'+tmptx.buyer]
+                self.adjudicateL1Dispute(tmptx,tmptx.buyer,buyer_hashes,\
+                                tmptx.seller,seller_hashes,sent_magic_hashes)
                 #action complete; remove the temporary items from the hash store
                 #TODO handle this properly, with persistence also
                 self.hashStore = {}
-                return False
+                self.magicStore= {}
+            
         #reaching here means the data wasn't found in the current hashStore,
         #so store it and wait for the next
         rmsg = {txID+'.'+self.escrowID:'SSL_DATA_RECEIVED'}
         self.sendMessages(rmsg,sender) 
-        self.hashStore.update(msg)
-                
         
+        #for buyers, clean out the magic hashes from the msg to be stored
+        #so that we can properly compare it with the seller's hashes
+        if role=='buyer':
+            self.magicStore.update({txID:magic_hashes})
+            msg ={msg.keys()[0]:msg.values()[0].split('^')[0]} #fun eh?
+            
+        #for buyers and sellers
+        self.hashStore.update(msg)
+        
+        
+                
     #logic: if one of three is inconsistent, the third party is lying
     #if all three are consistent, raise dispute level to super-escrow
     #(also if all three are inconsistent, hopefully this won't happen!!)
-    def adjudicateL1Dispute(self,transaction,buyer,buyer_hashlist,seller,seller_hashlist):
+    def adjudicateL1Dispute(self,transaction,buyer,buyer_hashlist,seller,\
+                                        seller_hashlist,magic_hashes):
         
         #TODO: actual bitcoin movements!
         
         #first step: generate our own ssl hash list using the NetworkAudit module
-        myhashlist = self.getHashList(transaction)
-        if not myhashlist:
+        my_hash_list = self.getHashList(transaction)
+        stcpdir = os.path.join(g("Directories","escrow_base_dir"),\
+                    '_'.join(['escrow',tx.uniqID(),"banksession"]),"stcplog")
+        hashes_to_ignore = sharkutils.get_hashes_to_ignore(stcpdir,magic_hashes)
+        
+        #now we can basically perform set operations to come to a decision
+        
+        #first subtract ignorable hashes from all hashlist records
+        my_hash_list = list(set(my_hash_list)-set(hashes_to_ignore))
+        buyer_hash_list = list(set(buyer_hash_list)-set(hashes_to_ignore))
+        seller_hash_list = list(set(seller_hashlist)-set(hashes_to_ignore))
+        
+        if not my_hash_list:
             #in this failure case, elevate dispute
             msg = {transaction.uniqID()+'.'+self.escrowID:\
 'DISPUTE_L1_ADJUDICATION_FAILURE:escrow hash list not found for this transaction'}
@@ -356,7 +399,7 @@ class EscrowAgent(Agent.Agent):
         
          #second step: comparison of three hash lists
          #third step: send adjudication messages to both counterparties
-        if (buyer_hashlist == myhashlist) and seller_hashlist != myhashlist:
+        if (buyer_hashlist == my_hash_list) and seller_hashlist != my_hash_list:
             msg={transaction.uniqID()+'.'+self.escrowID:\
 'DISPUTE_L1_ADJUDICATION:awarded to buyer, seller\'s ssl record is invalid'}
             #insert bitcoin transfer TODO
@@ -364,7 +407,7 @@ class EscrowAgent(Agent.Agent):
             for recipient in [buyer,seller]:
                 self.sendMessages(msg,recipient)
                 
-        elif (buyer_hashlist != myhashlist) and seller_hashlist == myhashlist:
+        elif (buyer_hashlist != my_hash_list) and seller_hashlist == my_hash_list:
             msg={transaction.uniqID()+'.'+self.escrowID:\
 'DISPUTE_L1_ADJUDICATION:awarded to seller, buyer\'s ssl record is invalid'}
             #insert bitcoin transfer TODO
@@ -372,7 +415,7 @@ class EscrowAgent(Agent.Agent):
             for recipient in [buyer,seller]:
                 self.sendMessages(msg,recipient)
                 
-        elif (buyer_hashlist == myhashlist) and seller_hashlist == myhashlist:
+        elif (buyer_hashlist == my_hash_list) and seller_hashlist == my_hash_list:
             msg={transaction.uniqID()+'.'+self.escrowID:\
 'DISPUTE_L1_ADJUDICATION_FAILURE:all ssl data is consistent - dispute escalated to super escrow'}
             #TODO: additional transaction state , L2 dispute

@@ -102,12 +102,10 @@ class EscrowAccessor(Agent):
                         #to ensure the same uniqueID; remember Python is pass-by-ref
                         #so this updates the tx object in the calling script
                         tx.creationTime = int(m.split(':')[1].split(',')[-1])
-                        tx.state='INITIALISED'
                         shared.debug(1,["Transaction was accepted by escrow."])
                         #the transaction should now be added to the persistent
                         #store;
-                        self.agent.transactions.append(tx)
-                        self.agent.pT()
+                        self.agent.transactionUpdate(tx=tx,new_state='INITIALISED')
                         return True
                     else:
                         shared.debug(0,["message about the wrong transaction:",\
@@ -142,8 +140,7 @@ class EscrowAccessor(Agent):
             exit(1)    
         elif accepted==1:
             shared.debug(1,["Bank session was accepted by escrow."])
-            tx.state='IN_PROCESS'
-            self.agent.pT()
+            self.agent.transactionUpdate(tx=tx,new_state='IN_PROCESS')
             return True
             
         if not accepted:

@@ -1,6 +1,8 @@
 import os
+import shutil
 import shared
 import Agent
+import NetworkAudit.sharkutils as sharkutils
 #for brevity
 def g(x,y):
     return shared.config.get(x,y)
@@ -21,10 +23,22 @@ class UserAgent(Agent.Agent):
         #The active escrow is not yet defined.
         self.activeEscrow = None
         
+        #store the location used for the NSS key log file
+        self.keyFile=g("Directories","ssl_keylog_file")
+        
     def startBankingSession(self,transaction):
         role = transaction.getRole(self.uniqID())
         if role=='invalid':
+            shared.debug(0,["Trying to start a banking session but we're not"
+                            "buyer or seller for the transaction!"])
             return False
+        
+        #wipe clean the keylog file
+        #remove pre-existing ssl key file so we only load the keys for this run
+        #TODO: make sure the user has set the ENV variable - pretty disastrous
+        #otherwise!
+        if role=='buyer':
+            shared.silentremove(self.keyFile)
         
         #create local directories to store this banking session
         #format of name is: role_txid_'banksession'
@@ -64,6 +78,29 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
          #we must return to confirm success in startup of net arch
         return True   
     
+    def endBankingSession(self,transaction):
+        role = transaction.getRole(self.uniqID())
+        if role=='buyer':
+            #copy the premaster secrets file into the testing directory
+            #so that it can be decrypted at a later stage by the buyer
+            runID='_'.join([role,transaction.uniqID(),'banksession'])
+            d = os.path.join(g("Directories",role+'_base_dir'),runID)
+            shutil.copy2(self.keyFile,os.path.join(d,runID+'.keys'))
+    
+    #this method is at useragent level only as it's only for buyers
+    #see details in sharkutils.get_magic_hashes
+    def getMagicHashList(self, tx):
+        if (tx.getRole(self.uniqID()) != 'buyer'):
+            shared.debug(0,["Error! You cannot send the magic hashes unless"\
+                            "you\'re the buyer!"])
+            exit(1)
+            
+        stcpdir = os.path.join(g("Directories","buyer_base_dir"),\
+                        '_'.join(["buyer",tx.uniqID(),"banksession"]),"stcplog")
+        shared.debug(0,["Trying to find any magic hashes located in:",\
+                    stcpdir,"using ssl decryption key:",self.keyFile])
+        return sharkutils.get_magic_hashes(stcpdir,self.keyFile,port=g("Buyer","buyer_stcp_port"))
+        
     #unused for now
     def findEscrow(self):
         print "finding escrow\n"

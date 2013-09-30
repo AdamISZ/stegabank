@@ -166,7 +166,9 @@ def do_transaction(myself, role):
         #wait for message telling us the buyer's finished
         if not myself.activeEscrow.waitForBankingSessionEnd(tx): exit(1)
         shared.debug(0,["The banking session is finished. Exiting."])
-        
+    
+    #final cleanup - for now only storing the premaster keys
+    myself.endBankingSession(tx)
 
 def do_dispute(myself,role):
     
@@ -195,9 +197,13 @@ def do_dispute(myself,role):
     #send the ssl data - we use the 'on the fly' method of formatting the message
     #noting that the escrow accessor can reset the message key correctly
     #based on the transaction passed, and always sends to the escrow by default
-    escrow.sendMessages(messages={'x':'SSL_DATA_SEND:'+\
-                                ','.join(myself.getHashList(tx))},transaction=tx)
-
+    my_ssl_data = ','.join(myself.getHashList(tx))+'^'
+    if role == 'buyer':
+        #need to send the magic hashes telling the escrow which other hashes
+        #to ignore in the comparison
+        my_ssl_data += ','.join(myself.getMagicHashList(tx))
+    escrow.sendMessages(messages={'x':'SSL_DATA_SEND:'+my_ssl_data},transaction=tx)
+    
     #wait for the escrow to respond with adjudication
     adjudication = escrow.getL1Adjudication(tx)
 

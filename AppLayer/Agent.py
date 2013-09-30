@@ -86,7 +86,8 @@ class Agent(object):
                         '_'.join([role,tx.uniqID(),"banksession"]),"stcplog")
         shared.debug(0,["Trying to find the hashes in this directory:",hash_location])
         return sharkutils.get_all_ssl_hashes_from_capfile(hash_location,\
-            stcp_flag=True,port=g(role.title(),'_'.join([role,'stcp','port'])))
+        stcp_flag=True,port=g(role.title(),'_'.join([role,'stcp','port'])))
+
         
     def initialiseNetwork(self):
         print "setting up network architecture"
