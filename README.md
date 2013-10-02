@@ -6,7 +6,8 @@ Dependencies
 ------------
 
 *  [Wireshark](www.wireshark.org) - needed for all agents. Includes command line tools tshark, mergecap etc.
-*  [stcppipe](http://aluigi.altervista.org/mytoolz.htm#stcppipe) - nneded for all agents. Use at least 0.4.8a
+*  [stcppipe](http://aluigi.altervista.org/mytoolz.htm#stcppipe) - needed for all agents. Use at least 0.4.8a
+*  [ssh tool plink for Windows](http://www.chiark.greenend.org.uk/~sgtatham/putty/download.html) - needed for buyer and seller if on Windows. On *nix just use existing ssh and sshd (if escrow).
 *  [Squid](http://www.squid-cache.org/Download/) - needed for seller. There are some subtleties in getting this up and running on Windows, but it does work.
 *  [Firefox](http://www.mozilla.org/en-US/firefox/new/) - needed for buyer. Unfortunately other browsers will not work (Chrome nearly works, but is not supported). v23 at least.
 *  [Python 2.7.5](http://www.python.org/getit/) - need for all agents. Add package pika if using rabbitMQ.
