@@ -84,8 +84,11 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
             #copy the premaster secrets file into the testing directory
             #so that it can be decrypted at a later stage by the buyer
             runID='_'.join([role,transaction.uniqID(),'banksession'])
-            d = os.path.join(g("Directories",role+'_base_dir'),runID)
-            shutil.copy2(self.keyFile,os.path.join(d,runID+'.keys'))
+            key_file_name = os.path.join(g("Directories",role+'_base_dir'),\
+                                         runID,runID+'.keys')
+            shutil.copy2(self.keyFile,key_file_name)
+            transaction.keyFile = key_file_name
+            self.transactionUpdate(tx=transaction,new_state='IN_PROCESS')
     
     #this method is at useragent level only as it's only for buyers
     #see details in sharkutils.get_magic_hashes
@@ -98,8 +101,9 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
         stcpdir = os.path.join(g("Directories","buyer_base_dir"),\
                         '_'.join(["buyer",tx.uniqID(),"banksession"]),"stcplog")
         shared.debug(0,["Trying to find any magic hashes located in:",\
-                    stcpdir,"using ssl decryption key:",self.keyFile])
-        return sharkutils.get_magic_hashes(stcpdir,self.keyFile,port=g("Buyer","buyer_stcp_port"))
+                    stcpdir,"using ssl decryption key:",tx.keyFile])
+        return sharkutils.get_magic_hashes(stcpdir,tx.keyFile,\
+                                        port=g("Buyer","buyer_stcp_port"))
         
     #unused for now
     def findEscrow(self):

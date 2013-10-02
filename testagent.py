@@ -197,11 +197,11 @@ def do_dispute(myself,role):
     #send the ssl data - we use the 'on the fly' method of formatting the message
     #noting that the escrow accessor can reset the message key correctly
     #based on the transaction passed, and always sends to the escrow by default
-    my_ssl_data = ','.join(myself.getHashList(tx))+'^'
+    my_ssl_data = ','.join(myself.getHashList(tx))
     if role == 'buyer':
         #need to send the magic hashes telling the escrow which other hashes
         #to ignore in the comparison
-        my_ssl_data += ','.join(myself.getMagicHashList(tx))
+        my_ssl_data += '^'+','.join(myself.getMagicHashList(tx))
     escrow.sendMessages(messages={'x':'SSL_DATA_SEND:'+my_ssl_data},transaction=tx)
     
     #wait for the escrow to respond with adjudication

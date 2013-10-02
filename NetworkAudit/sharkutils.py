@@ -273,13 +273,20 @@ def get_ssl_hashes_from_capfile(capfile,port=-1,stream='',options=[],frames=[]):
     return get_ssl_hashes_from_ssl_app_data_list(ssl_app_data_list)
 
 
-
+#The purpose of this function is to find frames occurring after GETs
+#which were not fully served before a connection close. These cannot
+#be included in a comparison of validity of network traces.
 def get_hashes_to_ignore(stcpdir,magic_hashes):
     if not any(magic_hashes):
-        return None
+        return []
     unsafe_hashes=[]
     for file in os.listdir(stcpdir):
-        frames_hashes = get_frames_hashes(file)
+        if file == 'merged.pcap':
+            continue
+        frames_hashes = get_frames_hashes(os.path.join(stcpdir,file))
+        print "for file: ",file,"frames_hashes are: ",frames_hashes
+        if not frames_hashes:
+            continue
         bad_frames=[]
         for frame,hashes in frames_hashes.iteritems():
             if set(magic_hashes).intersection(set(hashes)):
@@ -287,14 +294,22 @@ def get_hashes_to_ignore(stcpdir,magic_hashes):
                 bad_frames.append(frame)
         #we now have a list of all 'bad' frames in this stream/file
         #it should just be one frame - the last GET
+        print "bad frames are: ",bad_frames
+        if not bad_frames:
+            continue
         if len(bad_frames)>1:
             shared.debug(0,["Unexpected case - more than one 'bad' frame",
                             "in the escrow log."])
-            exit(1)
+            #exit(1)
         #append all hashes in SUCCEEDING frames to the ignorable list
-        unsafe_hashes.extend([item for sublist in \
-        [v for k,v in frames_hashes.iteritems() if k>bad_frames[0]] \
-        for item in sublist])
+        to_extend = [item for sublist in \
+        [v for k,v in frames_hashes.iteritems() if k>bad_frames[len(bad_frames)-1]] \
+        for item in sublist]
+        shared.debug(0,["We are about to exclude all ssl hashes from",\
+        "ssl frames which occurred after frame:",bad_frames[len(bad_frames)-1],\
+        "in file:",file])
+        shared.debug(0,["and the hashes we're ignoring are:",to_extend])
+        unsafe_hashes.extend(to_extend)
     return list(set(unsafe_hashes))
    
 #allow a user agent, acting as buyer, to list all ssl hashes of GET
@@ -306,15 +321,22 @@ def get_magic_hashes(stcpdir,keyfile,port):
     #this data structure will contain ALL GET requests performed under SSL
     #for this banking session
     GETs=[]
+    #pass the keyfile as a -o flag to tshark
+    options=['ssl.keylog_file:'+keyfile]
     
     #these magic hashes will be sent to escrow; when escrow finds them
     #in his hash list, he will dump all following hashes in that stream.
     #(Detailed explanation of reason deferred to later TODO)
     magic_hashes = []
 
-    for capfile in os.listdir(stcpdir):
-        
-        GET_dict = get_GET_http_requests(os.path.join(stcpdir,capfile),keyfile)
+    for x in os.listdir(stcpdir):
+        if x == 'merged.pcap':
+            continue
+        capfile = os.path.join(stcpdir,x)
+        GET_dict = get_GET_http_requests(capfile,options)
+        shared.debug(0,["Here is the GET dictionary for the file",capfile,":",GET_dict])
+        if not GET_dict:
+            continue
         
         if not any(GET_dict):
             #this happens if the stream doesn't contain SSL; just ignore it
@@ -333,19 +355,26 @@ def get_magic_hashes(stcpdir,keyfile,port):
         #it in that stream.
         
         #get the highest frame number in the dict
-        highest_frame = max(GET_dict,key=GET_dict.get)
-        #check for no http-content-type after: this is the signal that
+        highest_frame = max(GET_dict,key=int)
+        shared.debug(0,["In file:",capfile," the highest get frame is:",\
+                    highest_frame])
+        
+        #check for no http-content-type OR no http-last-modified (cache hit)
+        # after: this is the signal that
         #the connection was dropped, and we cannot assume the other parties
         #in proxying did NOT get the response.
-        fs = 'ssl and http.content_type and (frame.number gt '+highest_frame+')'
-        if not tshark(file=capfile,filter=fs,field='frame.number'):
+        #TODO: other possible filters are http.server and tcp.srcport
+        #I think in some way it should all work
+        fs = 'ssl and (http.content_type or http.last_modified) and (frame.number gt '+highest_frame+')'
+        if not tshark(capfile,filter=fs,field='frame.number',options=options):
             #get the ssl hashes of that frame
             ssl_hashes = get_ssl_hashes_from_capfile(capfile,\
                         port=port,frames=[highest_frame],options=options)
             #append it to magic_hashes
+            shared.debug(0,["Appending these value to magic_hashes:",ssl_hashes])
             magic_hashes.extend(ssl_hashes)
             
-    shared.debug(4,["Here is the full printout of the GET requests:",GETs])
+    shared.debug(1,["Here is the full printout of the GET requests:",GETs])
     return magic_hashes
     
 #30 Sep 2013 from dansmith; not being used at the moment except for reference
@@ -545,9 +574,9 @@ def get_html_hash_from_ascii_dump(ascii_dump):
 #NOTE that inorder to work, you must provide this function with the correct
 #ssl key log file in the keyfile argument
 #Both the frame number and the GET request string are returned
-def get_GET_http_requests(capfile,keyfile):
+def get_GET_http_requests(capfile,options):
     hexdigits = shared.hexdigits
-    options=['ssl.keylog_file:'+keyfile]
+    
     frames_list = shared.pisp(tshark(capfile,filter='ssl and http.request',\
                                      field='frame.number',options=options))
     #data structure to store all the GETs found:
@@ -765,6 +794,9 @@ def get_frames_hashes(capfile,port='',stream='',options=[]):
     
     ssl_frames = shared.pisp(frames_str)
     shared.debug(1,['need to process this many frames:', len(ssl_frames)])
+    if not any(ssl_frames):
+        return None
+    
     for frame in ssl_frames:
         frames_hashes[frame]= [] #array will contain all hashes for that frame
     

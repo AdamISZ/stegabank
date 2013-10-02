@@ -24,7 +24,11 @@ class Transaction():
         self.multisigAddress = ''#requestMultisigAddress()
         #
         self.creationTime = int(time.time())
+        #state machine described above
         self.state = state
+        #locally stored key file with all keys for this transaction
+        #set by buyer only at end of banking session
+        self.keyFile=''
         
     def requestMultisigAddress(self):
         print "creating a multisig address for transaction: \n",self
