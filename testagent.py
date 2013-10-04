@@ -212,8 +212,6 @@ def do_dispute(myself,role):
     time.sleep(4)
     exit(0)
 
-
-
 if __name__ == "__main__":
     #Load all necessary configurations:
     #========================
@@ -227,16 +225,21 @@ if __name__ == "__main__":
         g(role.title(),"base_currency"))
     
     #instantiate a blocking connection to the message queue
-    Msg.instantiateConnection(un=g(role.title(),role+"_rabbitmq_user"),\
+    try:
+        Msg.instantiateConnection(un=g(role.title(),role+"_rabbitmq_user"),\
                               pw=g(role.title(),role+"_rabbitmq_pass"))
+    except:
+        shared.debug(0,["Failed to instantiate a connection to rabbitmq."\
+                        "Quitting"])
+        exit(1)
     
     #start with a menu
-    ans=True
-    while ans:
+    while True:
         print ("""Please choose an option:
         [1] List current transactions
         [2] Start a new transaction
         [3] Dispute an existing transaction
+        [4] Exit
         """)
         choice = shared.get_validated_input("Enter an integer:",int)
         if choice==1:
@@ -245,6 +248,8 @@ if __name__ == "__main__":
             do_transaction(myself,role)
         elif choice == 3:
             do_dispute(myself,role)
+        elif choice == 4:
+            exit(0)
         else:
             print "invalid choice. Try again."
 

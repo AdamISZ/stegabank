@@ -385,8 +385,7 @@ def get_html_hash_from_ascii_dump(ascii_dump):
 
     if ascii_dump == '':
         print 'empty frame dump'
-        cleanup_and_exit()
-        return
+        return []
 
     #We are interested in "Uncompressed entity body" for compressed HTML. If not present, then
     #the very last entry of "De-chunked entity body" for no-compression no-chunks HTML. If not present, then
@@ -436,7 +435,6 @@ def get_html_hash_from_ascii_dump(ascii_dump):
             flathexlist = [item for sublist in hexlist for item in sublist]
             #convert the list into a single string
             hexstring = ''.join(flathexlist)
-            print hexstring
             start_pos_in_hex = hexstring.find('0d0a0d0a')+len('0d0a0d0a')
             #Knowing that there are 16 2-char hex numbers in a single line, calculate absolute position
             start_line_in_ascii = start_pos_in_hex/32
@@ -449,11 +447,11 @@ def get_html_hash_from_ascii_dump(ascii_dump):
             body_start = reassembled_pos+newline_offset+1+start_line_in_ascii*line_length+line_numbering_length+2+line_offset_in_ascii*3
             if body_start == -1:
                 print 'Could not find HTTP body'
-                cleanup_and_exit()
                 return
             lines = ascii_dump[body_start:].split('\n')
             #treat the first line specially
-            binary_html += bytearray.fromhex(lines[0][:-16])
+            print lines[0]
+            binary_html += bytearray.fromhex(lines[0][:-17])
             for line in lines[1:]:
                 #convert ascii representation of hex into binary
                 #only deal with lines where first 4 chars are hexdigits
@@ -492,11 +490,10 @@ def get_html_hash_from_ascii_dump(ascii_dump):
             
             if body_start == -1:
                 print 'Could not find HTTP body'
-                cleanup_and_exit()
                 return
             lines = ascii_dump[body_start:].split('\n')
             #treat the first line specially
-            binary_html += bytearray.fromhex(lines[0][:-16])
+            binary_html += bytearray.fromhex(lines[0][:-17])
             for line in lines[1:]:
                 #convert ascii representation of hex into binary
                 #only deal with lines where first 4 chars are hexdigits
@@ -517,7 +514,7 @@ def get_html_hash_from_ascii_dump(ascii_dump):
         page_end = ascii_dump.rfind('.\n\n')
         if page_end == -1:
             print "Could not find page's end"
-            return 0
+            return None
         
         page_start = ascii_dump.rfind('0d 0a 0d 0a')
         #skip the HTTP header and find where the HTTP body starts
@@ -533,7 +530,7 @@ def get_html_hash_from_ascii_dump(ascii_dump):
         delimiter_pos = hexstring.rfind('0d0a0d0a')
         if delimiter_pos == -1:
             print "Could not find page's start"
-            return 0
+            return None
         start_pos_in_hex = delimiter_pos +len('0d0a0d0a')
         #Knowing that there are 16 2-char hex numbers in a single line, calculate absolute position
         start_line_in_ascii = start_pos_in_hex/32
@@ -544,10 +541,10 @@ def get_html_hash_from_ascii_dump(ascii_dump):
               
         if page_end < page_start:
             print "Could not find HTML page"
-            return 0
+            return None
         lines = ascii_dump[page_start:page_end+len('.\n\n')].split('\n')
         #treat the first line specially
-        binary_html += bytearray.fromhex(lines[0][:-16])
+        binary_html += bytearray.fromhex(lines[0][0:48])
         for line in lines[1:]:
             #convert ascii representation of hex into binary
             #only deal with lines where first 4 chars are hexdigits
@@ -556,17 +553,18 @@ def get_html_hash_from_ascii_dump(ascii_dump):
                 binary_html += m_array
             else:
                 break
-    print binary_html
+    
     if len(binary_html) == 0:
         print 'empty binary array'
-        
-        return
-    #FF's view source (against which we are comparing) makes certain changes to the original HTML. It replaces
+        return None
+    #FF's view source (against which we are comparing) makes certain changes
+    # to the original HTML. It replaces
     # '\r\n' with '\n'
     #and '\r' with '\n'
     binary_html2 = binary_html.replace('\r\n','\n')
     binary_html3 = binary_html2.replace('\r','\n')
-    return hashlib.md5(binary_html3).hexdigest()
+    #modified 2 Oct; return html as well as hash, currently used in this module
+    return [binary_html3,hashlib.md5(binary_html3).hexdigest()]
 
 #30 Sep 2013:This is a based mainly on dansmith's get_html_from_ascii_dump. 
 #Here, given a particular capfile, we want to find the frame numbers
@@ -620,8 +618,8 @@ def get_GET_http_requests(capfile,options):
             
             body_start = reassembled_pos+newline_offset+1+line_numbering_length+2
             lines = ascii_dump[body_start:].split('\n')
-            #treat the first line specially
-            #TODO why is this necessary?(esp. why is it different from html case)
+            #treat the first line specially - not needed now, remove TODO
+            #this is different to HTML case, because we DO want the headers
             binary_html += bytearray.fromhex(lines[0][0:48])
             for line in lines[1:]:
                 #convert ascii representation of hex into binary
@@ -641,6 +639,55 @@ def get_GET_http_requests(capfile,options):
     #now we have all frames with gets in a list of dicts frame num: request
     return GETs
 
+#This function is designed to return ALL HTML that's readable in the capfile
+#using the one or many keys specified in keyfile. The return value is a list
+#of all HTML content type text (TODO consider broadening to include other media)
+def get_all_html_from_key_file(capfile,keyfile):
+    options = ['ssl.keylog_file:'+keyfile]
+    #Algorithm: select only data that can be read (text/html,css,javascript)
+    #i.e. don't bother with media.
+    #split ascii dump into chunks delimited by newline+'Frame' so we're looking
+    #at one frame at a time but still only calling tshark once
+    #Then: call get html hash from ascii dump which does its magic based on
+    #filtering "De-chunked entity body"/"Uncompressed entity body"/
+    #"Reassembled SSL"/"Decrypted SSL" in that precise order (the reason for
+    # which is clear if you examine -x output closely enough).
+    #Using the specific key file specified by keyfile argument means we only
+    #get a subset of the data, assuming not EVERYTHING is one ssl session
+    #with only one master secret (which it can be in principle).
+    asciidump = tshark(capfile,field='x',\
+            filter='ssl and http.content_type[0:4]==\"text\"',options=options)
+    ascii_split = asciidump.split(shared.PINL+'Frame')
+    kfhtml=[]
+    if not any(ascii_split):
+        return None
+    for x in ascii_split:
+        if not x:
+            continue
+        html_and_hash = get_html_hash_from_ascii_dump(x)
+        if not html_and_hash:
+            continue
+        html,hash = html_and_hash
+        kfhtml.append(html)
+    #print "for keyfile:",keyfile,"got html:",html
+    return kfhtml
+
+#argument keyfile should be that grabbed from a banking session
+#(located in env variable SSL_KEYLOG_FILE). Make sure it's not polluted
+#with hundreds of keys from previous sessions.
+#The function will split the keys into separate files and then call tshark
+#to extract html extractable with each individual key
+#Return value is a dict whose keys are the numbers of the sslkeys (sslkeys are 
+#numbered according to their line number in the keyfile), and the values
+#in the dict are lists, each element of the list is html produced.
+def get_html_key_by_key(capfile,keyfile):
+    html_per_key = {}
+    d = os.path.join(os.path.dirname(keyfile),'keys')
+    if not os.path.exists(d): os.makedirs(d)
+    shared.make_separate_files(keyfile,filter='SSL/TLS',subdirectory='keys')
+    for f in os.listdir(d):
+        html_per_key[f] = get_all_html_from_key_file(capfile,os.path.join(d,f))
+    return html_per_key
 #===============================================================================
 #Functions for debugging purposes
 #===============================================================================
