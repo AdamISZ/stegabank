@@ -7,12 +7,12 @@ def g(x,y):
 
 #I suspect transactions should be instantiated on the escrow only,
 #so as to have a unique timestamp, and then propagated to the counterparties.
-#state machine: INVALID|UNINITIALISED|INITIALISED|IN_PROCESS|IN_DISPUTE|COMPLETE|ABORTED
+#state machine: see AppLayer/TransactionStateMap.txt
 class Transaction():
     
-    def __init__(self,buyerID,sellerID,amount,price,currency,state='UNINITIALISED'):
+    def __init__(self,buyerID,sellerID,amount,price,currency,state=1):
         print "instantiating a transaction"
-        self.state = state
+        
         self.buyer=buyerID
         self.seller=sellerID
         #self.escrow=escrow
@@ -41,6 +41,20 @@ class Transaction():
         if agentID==self.buyer: return 'buyer'
         elif agentID==self.seller: return 'seller'
         else: return 'invalid'
+        
+    def __eq__(self, other):
+        if self.state == other.state and \
+        self.buyer == other.buyer and \
+        self.seller== other.seller and \
+        self.amount == other.amount and \
+        self.price == other.price and \
+        self.currency == other.currency and \
+        self.multisigAddress == other.multisigAddress and \
+        self.creationTime == other.creationTime:
+            return True
+        else:
+            return False
+        
     '''    
     #serves for serialization, messaging and debugging, hopefully!
     def __repr__(self):

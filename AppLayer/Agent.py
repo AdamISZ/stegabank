@@ -29,35 +29,38 @@ class Agent(object):
                 self.transactions = pickle.load(txf)
         else:
             self.transactions=[]
-        self.printCurrentTransactions()
+        #self.printCurrentTransactions()
     
     #To ensure correct persistence, transaction states can only be updated
-    #via this method. The transaction can be set either with a tx object
+    #via this method.
+    #If full is set, we just persist the current list with no changes.
+    #Otherwise, the transaction can be set either with a tx object
     #or an ID. The new state should be defined (see Transaction.Transaction)
     #if it's not, the transaction will be deleted from the store
     #TODO a bit more error handling - cannot hand a txID with a new tx!
-    def transactionUpdate(self, txID='',tx=None,new_state=''):
-        if not tx:
-            if not txID:
-                raise Exception("you called transactionUpdate without specifying a transaction! Doh!")
-            tx = filter(lambda a: a.uniqID()==txID,self.transactions)[0]
+    def transactionUpdate(self, full=False, txID='',tx=None,new_state=''):
+        if not full:
+            if not tx:
+                if not txID:
+                    raise Exception("you called transactionUpdate without"+\
+                                "specifying a transaction! Doh!")
+                tx = self.getTxByID(txID)
 
-        index = next((i for i in range(0,len(self.transactions)) \
-                if self.transactions[i].uniqID()==tx.uniqID()),None)
-        
-        if not index: #means this is a new transaction; add it
-            self.transactions.append(tx)
-            if not new_state:
-                raise Exception("You cannot add a transaction with no state!")
-            self.transactions[len(self.transactions)-1].state=new_state
-        else:
-            if not new_state:
-                #get rid of it
-                del self.transactions[index]
-                #self.transactions = [x for x in self.transactions if x != self.transactions[index]]
+            index = next((i for i in range(0,len(self.transactions)) \
+                    if self.transactions[i].uniqID()==tx.uniqID()),None)
+            
+            if not index: #means this is a new transaction; add it
+                self.transactions.append(tx)
+                if not new_state:
+                    raise Exception("You cannot add a transaction with no state!")
+                self.transactions[len(self.transactions)-1].state=new_state
             else:
-                #update the state
-                self.transactions[index].state = new_state
+                if not new_state:
+                    #get rid of it
+                    del self.transactions[index]
+                else:
+                    #update the state
+                    self.transactions[index].state = new_state
         
         #persist to file - note that persistence is definitely necessary,
         #but of course this primitive file-as-database would not really
@@ -75,7 +78,11 @@ class Agent(object):
         for i in range(0,len(self.transactions)):
             print "[",str(i),"] - ",self.transactions[i].uniqID(),\
             "Buyer:",self.transactions[i].buyer,"Seller:",self.transactions[i].seller
-        
+    
+    #self-expl
+    def getTxByID(self,txID):
+        return [x for x in self.transactions if x.uniqID()==txID][0]
+            
     #keeping this as simple as possible - will return None if data wasn't collected
     def getHashList(self, tx):
         role = tx.getRole(self.uniqID())

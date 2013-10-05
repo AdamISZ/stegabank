@@ -100,12 +100,14 @@ def local_command(command,bg=False,redirect=''):
             #Additional note: finally fixed this incredibly pernicious bug!
             #for details, see my post at: http://www.reddit.com/r/Python/
             #comments/1mpxus/subprocess_modules_and_double_quotes/ccc4sqr
-            return subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            return subprocess.Popen(command,stdout=subprocess.PIPE,\
+                                stderr=subprocess.PIPE,stdin=subprocess.PIPE)
         else:
             return subprocess.check_output(command)
     elif OS == 'Linux':
         if bg: 
-            return subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            return subprocess.Popen(command,stdout=subprocess.PIPE,\
+                                stderr=subprocess.PIPE,stdin=subprocess.PIPE)
         else:
             #in case of foreground execution, we can use the output; if not
             #it doesn't matter

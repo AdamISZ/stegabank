@@ -1,5 +1,6 @@
 import shared
 import time
+import pickle
 import Messaging.MessageWrapper as Msg
 from AppLayer.Agent import Agent
 from AppLayer.Transaction import Transaction
@@ -8,7 +9,7 @@ from AppLayer.UserAgent import UserAgent
 def g(x,y):
     return shared.config.get(x,y)
     
-class EscrowAccessor(Agent):
+class EscrowAccessor():
     #note that certain information will have to be retrieved to access escrow
     def __init__(self,agent,host='',username='',password='',port='',escrowID=''):
         print "instantiating a remote escrow accessor"
@@ -21,10 +22,91 @@ class EscrowAccessor(Agent):
         self.accessPort=port
         self.uniqID = escrowID
         
-        #at start up of connection with escrow, our message buffer 
-        #will be empty. it has form {'transactionid.agentid':message}
-        self.messageBuffer={}
+        #now we have a clean messsage queue, we can start normal operations
+        #starting up an escrow acccessor means you have to synchronize the
+        #state of any transactions associated with it
+        if not self.synchronizeTransactions():
+            #for now this is dealt with ungracefully, but we can do better TODO
+            shared.debug(0,["Serious problem, we failed to synchronize transactions"])
+            exit(1)
+                
+    #Important: it's guaranteed that self.agent has already loaded its 
+    #transactions.p database since that action occurs in the Agent constructor.
+    #Callers MUST pay attention to return value; if false, the sync failed
+    #and we'll have to try again or something.
+    def synchronizeTransactions(self):
+        if not Msg.chan:
+            #connection channel not instantiated; cannot continue
+            return False
         
+        #make absolutely sure we're not responding to stale data:
+        while True:
+            msg = self.getSingleMessage()
+            if not msg:
+                break
+            
+        self.sendMessages({'0.'+self.agent.uniqID():'TRANSACTION_SYNC_REQUEST'},\
+                          self.uniqID)
+        
+        while True:
+            #wait for response; we don't expect a long wait as it's a low
+            #intensity workload for escrow
+            msg = self.getSingleMessage()
+            
+            if not msg:
+                #we stay here since we insist on getting a response.
+                #in the absence of an up to date transaction list, nothing
+                #can proceed
+                continue
+            
+            hdr_and_data = msg.values()[0].split(':')
+            
+            #in case we got a naughty message without a colon!
+            if len(hdr_and_data) != 2:
+                shared.debug(0,["Critical error, received data in wrong format!"])
+                continue
+            
+            hdr, data = hdr_and_data
+            
+            if hdr == 'TRANSACTION_SYNC_COMPLETE':
+                break
+            
+            if hdr != 'TRANSACTION_SYNC_RESPONSE':
+                shared.debug(0,["The message server sent a wrong message in the"\
+                                "stream of transaction data."])
+                continue
+            
+            if not data:
+                #there were no pre-existing transactions
+                return True
+            #load as ascii string; docs promise it works
+            tx = pickle.loads(data)
+            
+            #in this section we'll break the rule of not updating the tx
+            #list directly because we commit at the end.
+            if tx in self.agent.transactions:
+                #replace old with new
+                self.agent.transactions = [tx if x.uniqID()==tx.uniqID() \
+                                    else x for x in self.agent.transactions]
+                
+            else:
+                #Completely new transaction, unknown to user.
+                #This usually won't happen; it means the useragent has "lost"
+                #a transaction object
+                self.agent.transactions.append(tx)
+                
+        #finished making changes, persist
+        try:
+            self.agent.transactionUpdate(full=True)
+        except:
+            shared.debug(0,["Failure to synchronize transaction list!"])
+            return False
+        
+        #success
+        self.agent.printCurrentTransactions()
+        
+        return True
+                
     def sendMessages(self,messages={},recipientID='',transaction=None):
         recipientID = self.uniqID if recipientID == '' else recipientID
         
@@ -43,8 +125,7 @@ class EscrowAccessor(Agent):
         if not msgs: 
             return None
         else:
-            self.messageBuffer=msgs
-            return True
+            return msgs
         
     def waitForMessages(self,timeout):
         for x in range(1,timeout):
@@ -54,7 +135,7 @@ class EscrowAccessor(Agent):
         shared.debug(1,["Waiting for messages timed out"])
         return False
     
-    def getSingleMessage(self,timeout):
+    def getSingleMessage(self,timeout=1):
         return Msg.getSingleMessage(self.agent.uniqID(),timeout)
         
     def requestTransaction(self,buyer,seller,amount,price,curr):
@@ -105,7 +186,7 @@ class EscrowAccessor(Agent):
                         shared.debug(1,["Transaction was accepted by escrow."])
                         #the transaction should now be added to the persistent
                         #store;
-                        self.agent.transactionUpdate(tx=tx,new_state='INITIALISED')
+                        self.agent.transactionUpdate(tx=tx,new_state=2)
                         return True
                     else:
                         shared.debug(0,["message about the wrong transaction:",\
@@ -140,7 +221,7 @@ class EscrowAccessor(Agent):
             exit(1)    
         elif accepted==1:
             shared.debug(1,["Bank session was accepted by escrow."])
-            self.agent.transactionUpdate(tx=tx,new_state='IN_PROCESS')
+            self.agent.transactionUpdate(tx=tx,new_state=4)
             return True
             
         if not accepted:

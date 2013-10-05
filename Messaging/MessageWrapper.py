@@ -72,11 +72,12 @@ def sendMessages(messages={},recipientID='escrow'):
         
     return True
 
-def getSingleMessage(recipientID,timeout=30):
+def getSingleMessage(recipientID,timeout=1):
     global chan 
     chan.queue_declare(queue=recipientID)
-    for i in range(1,timeout):
-        time.sleep(1)
+    for i in range(1,timeout+1):
+        if timeout>1:
+            time.sleep(1)
         method_frame,header_frame,body = chan.basic_get(queue=recipientID,\
                                                         no_ack=True)
         if not method_frame:

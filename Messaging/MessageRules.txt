@@ -20,7 +20,11 @@ Messaging Protocol for the ssl log escrow server running rabbitMQ:
 8. The 'message' will have a format MSGTYPE:data,data,data,....
 
 9. List of MSGTYPES:
-
+CLIENT_LOGON - data are: none
+CLIENT_LOGOUT - (unused)
+TRANSACTION_SYNC_REQUEST - data are: none
+TRANSACTION_SYNC_RESPONSE - data are: string in pickle format
+TRANSACTION_SYNC_COMPLETE - data are: none
 TRANSACTION_REQUEST - data are: buyerID,sellerID,amount,price,currency
 TRANSACTION_ACCEPT - data are: buyerID,sellerID,amount,price,currency,creation time
 CLIENT_TALK - data are: text message to counterparty
@@ -37,6 +41,12 @@ BANK_SESSION_ABORT - no data
 DISPUTE_L1_REQUEST - data are: reason for request,..
 SSL_DATA_REQUEST - data are: no data
 SSL_DATA_SEND - data are: hash1,hash2,..
+SSL_DATA_RECEIVED - data are: none
+SSL_DATA_REJECTED - data are: none
 DISPUTE_L1_ADJUDICATION_FAILURE - data are: reason for failure
 DISPUTE_L1_ADJUDICATION - data are: agent awarded to, reason for award
+DISPUTE_L2_REQUEST_SSL_KEYS - data are: none
+DISPUTE_L2_SEND_SSL_KEYS - data are: [CLIENT RANDOM/RSA],random,master secret,..
+TRANSACTION_SUCCESS_REQUEST - data are: none
+TRANSACTION_SUCCESS_REQUEST_ACCEPTED - data are: none
 <TBC>

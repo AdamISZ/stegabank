@@ -1,10 +1,12 @@
 import time
 import os
+import pickle
 import shared
 import Agent
 from AppLayer.Transaction import Transaction
 import NetworkAudit.sharkutils as sharkutils
 import Messaging.MessageWrapper as Msg
+import helper_startup as hs
 #for brevity
 def g(x,y):
     return shared.config.get(x,y)
@@ -51,10 +53,15 @@ class EscrowAgent(Agent.Agent):
             if not self.messageBuffer: continue
             #we received at least one message: check the headers,
             #perform the appropriate action
-            shared.debug(0,["We received at least one message in the main loop:",self.messageBuffer])
+            shared.debug(0,["We received at least one message in the main loop:",\
+                            self.messageBuffer])
             for k,m in self.messageBuffer.iteritems():
             # this is effectively a switch/case situation.
             # may look into a more Pythonic way of doing it later TODO
+                if 'TRANSACTION_SYNC_REQUEST' in m:
+                    shared.debug(0,["Received a transaction sync request"])
+                    self.sendTransactionSynchronization([k,m])
+                    
                 if 'TRANSACTION_REQUEST' in m:
                     shared.debug(0,["Found a transaction request in the buffer"])
                     self.processTransactionRequest([k,m]) 
@@ -84,7 +91,23 @@ class EscrowAgent(Agent.Agent):
                 elif 'SSL_DATA_SEND' in m:
                     shared.debug(0,["Found a ssl data transfer in the buffer"])
                     self.receiveSSLHashes({k:m})
-                    
+                
+                elif 'DISPUTE_L2_SEND_SSL_KEYS' in m:
+                    shared.debug(0,["Found a ssl key delivery message in the buffer"])
+                    self.receiveSSLKeysAndSendHtml([k,m])
+    
+    def sendTransactionSynchronization(self,msg):
+        requester = msg[0].split('.')[1]
+        shared.debug(0,["Requester:",requester])
+        smsg_key = '0.'+self.escrowID
+        for tx in self.transactions:
+            if requester == tx.buyer or requester == tx.seller:
+                #build message:
+                smsg = {smsg_key:'TRANSACTION_SYNC_RESPONSE:'+pickle.dumps(tx)}
+                self.sendMessages(smsg,requester)
+        #send a final message to mark end of list
+        self.sendMessages({smsg_key:'TRANSACTION_SYNC_COMPLETE:'},requester)
+        
     #for this function we use "instruction" rather than
     #"request" because users should be able to cancel WITHOUT
     #permission BEFORE bank session start; after that point,
@@ -114,15 +137,44 @@ class EscrowAgent(Agent.Agent):
                 self.sendMessages({txID+'.'+self.escrowID:\
                             'TRANSACTION_ABORT_ACCEPTED'},recipient)
             #abort
-            self.transactionUpdate(txID=txID,new_state='ABORTED') 
+            self.transactionUpdate(txID=txID,new_state=3) 
             
         else:
             for recipient in [buyerID,sellerID]:
                 self.sendMessages({txID+'.'+self.escrowID:\
                         'TRANSACTION_ABORT_REJECTED:'+response[1]},recipient)
                                
-                               
-                               
+    #in L2 dispute, we ask the buyer for one or more keys
+    #then we grab whatever html we can get with those keys
+    #and send them on to super escrow
+    def receiveSSLKeysAndSendHtml(self, msg):
+        #get the transaction first
+        tx = self.getTxByID(msg[0].split('.')[0])
+        
+        #grab the keys from the message and turn them into a single 
+        #keyfile for use by tshark
+        sslkeylines = msg[1].split(':')[1].split(',')
+        keydir = os.path.join(g("Directories","escrow_base_dir"),\
+                '_'.join('escrow',tx.uniqID(),'banksession'))
+        kf = os.path.join(keydir,'user_sent.keys')
+        with open(kf,'w') as f:
+            for kl in sslkeylines:
+                f.write(kl)
+            f.close()
+        
+        #now we can use user_sent.keys as our input to tshark
+        stcpdir=os.path.join(keydir,'stcplog')
+        merged_trace = os.path.join(stcpdir,'merged.pcap')
+        sharkutils.mergecap(merged_trace,stcpdir,dir=True)
+        htmlarray = sharkutils.get_all_html_from_keyfile(capfile=merged_trace,keyfile=kf)
+        #for user security, delete keys immediately ? TODO
+        
+        #send html to super escrow for adjudication TODO
+        shared.debug(0,["Sending html to super escrow for this transaction"])
+        self.sendMessages(msg={tx.uniqID()+'.'+\
+        self.superEscrow:'DISPUTE_L2_SEND_HTML_EVIDENCE:'+','.join(htmlarray)},\
+        transaction=tx)
+        
     #This function should be called when any TRANSACTION_REQUEST message
     #is sent. It checks for the existence of another message of the 
     #same type with the same parameters. If found, and the requests are
@@ -169,7 +221,7 @@ class EscrowAgent(Agent.Agent):
                 #create the transaction object and store it
                 tx = Transaction(req_msg_data[0],req_msg_data[1],req_msg_data[2]\
                                 ,req_msg_data[3],req_msg_data[4])
-                self.transactionUpdate(tx=tx,new_state='INITIALISED')
+                self.transactionUpdate(tx=tx,new_state=2)
                 
                 #create the acceptance message - we MUST give the recipient
                 #the unique ID otherwise it won't match in future correspondence
@@ -228,11 +280,13 @@ class EscrowAgent(Agent.Agent):
         for i,t in enumerate(self.transactions):
             if t.uniqID()==txID:
                 buyerID,sellerID = [t.buyer, t.seller]
-                if t.state != 'INITIALISED':
-                    response = ['reject','transaction is not in state INITIALISED']
+                #include state 19 as a possible restart after a failure
+                if t.state not in [2,19]:
+                    response = ['reject','transaction is not in a state ready \
+                                to do banking session']
                 else:
                     #check that proxy is running?TODO
-                    self.transactionUpdate(tx=self.transactions[i],new_state='IN_PROCESS')
+                    self.transactionUpdate(tx=self.transactions[i],new_state=17)
     
                     #TODO: killing pre-existing pipes here is only valid
                     #for one-session-at-a-time model; OK for now
@@ -270,20 +324,28 @@ class EscrowAgent(Agent.Agent):
     #and check against escrow's own record. Adjudicate on that basis.
     def requestSSLHashes(self,request):
         #first fire off request for hashes from both counterparties.
-        #even if they are online this may take some time. However, if they're
-        #offline, the request message is stored in the queue until they
-        #respond
+        #even if they are online this may take some time. State is maintained
+        #in the transaction.
         
         txID, requester = request[0].split('.')
-        self.transactionUpdate(txID=txID,new_state='IN_DISPUTE')
-        tx = filter(lambda a: a.uniqID()==txID,self.transactions)[0]
+        tx = self.getTxByID(txID)
+        #whether we put the tx in dispute depends on its current state, so check
+        if tx.state != 18:
+            self.sendMessages({txID+'.'+self.escrowID:'L1_DISPUTE_REJECTED: \
+                This transaction cannot yet be disputed as the banking session \
+                    has not been completed.'},requester)
+        
+        #we have the right current state - move to the disputed state
+        self.transactionUpdate(txID=txID,new_state=5)
+        
+        #need the ssl data from the counterparties to resolve the dispute
         counterparty = tx.buyer if tx.buyer != requester else tx.seller
         for recipient in [requester, counterparty]:
             msg={txID+'.'+self.escrowID:'SSL_DATA_REQUEST'}
             self.sendMessages(msg,recipient)
         
     #on receipt of hashes, match them with a transaction
-    #check that it's currently in a dispute state; store persistently
+    #check that it's currently in the correct dispute state; store persistently
     #finally, trigger adjudication if both sets have been received
     def receiveSSLHashes(self,msg):
         #ignore the message if it isn't a ssl data set
@@ -299,7 +361,7 @@ class EscrowAgent(Agent.Agent):
         shared.debug(0,["set the sender to : ",sender])
         
         #establish in advance which transaction this data refers to
-        tmptx = filter(lambda a: a.uniqID()==txID,self.transactions)[0]
+        tmptx = self.getTxByID(txID)
         if not tmptx:
             shared.debug(0,["Serious error: ssl data was sent for a transaction"\
                             " not stored on the escrow!"])
@@ -307,8 +369,15 @@ class EscrowAgent(Agent.Agent):
         
         #check the role as behaviour depends on it
         role = tmptx.getRole(sender)
-            
-        #this is a list of all the hashes
+        pre_states = [5,7] if role=='buyer' else [5,6]
+        #transaction should be waiting for buyer data
+        if not tmptx.state in pre_states:
+            rmsg = {txID+'.'+self.escrowID:'SSL_DATA_REJECTED:You should \
+                not have sent your ssl data at this time, it has been ignored.'}
+            self.sendMessages(rmsg,sender)
+      
+        #we have valid data, at the right time; so store it.
+        
         #buyers send magic hashes after '^' so:
         sent_data = msg.values()[0].split(':')[-1]
         
@@ -320,8 +389,7 @@ class EscrowAgent(Agent.Agent):
         else:
             hash_data = sent_data.split(',')
         
-        
-        
+        matched=False
         for k,m in self.hashStore.iteritems():
             tmptxID, tmpsender = k.split('.')
             tmphashdata = m.split(':')[-1].split(',')
@@ -331,12 +399,13 @@ class EscrowAgent(Agent.Agent):
             if tmptxID==txID:
                 #we have a match; send the adjudication,after confirming
                 #receipt
+                matched=True
                 rmsg = {txID+'.'+self.escrowID:'SSL_DATA_RECEIVED'}
                 self.sendMessages(rmsg,sender)
-                
-                buyer_hashes = tmphashdata if tmptx.getRole(tmptxID)=='buyer'\
+                self.transactionUpdate(txID=txID,new_state=8)
+                buyer_hashes = tmphashdata if role =='seller'\
                     else hash_data
-                seller_hashes = tmphashdata if tmptx.getRole(tmptxID)=='seller'\
+                seller_hashes = tmphashdata if role =='buyer'\
                     else hash_data
                 
                 #to decide which magic_hashes to send to adjudication, we can't
@@ -353,19 +422,23 @@ class EscrowAgent(Agent.Agent):
                 self.hashStore = {}
                 self.magicStore= {}
             
-        #reaching here means the data wasn't found in the current hashStore,
-        #so store it and wait for the next
-        rmsg = {txID+'.'+self.escrowID:'SSL_DATA_RECEIVED'}
-        self.sendMessages(rmsg,sender) 
-        
-        #for buyers, clean out the magic hashes from the msg to be stored
-        #so that we can properly compare it with the seller's hashes
-        if role=='buyer':
-            self.magicStore.update({txID:magic_hashes})
-            msg ={msg.keys()[0]:msg.values()[0].split('^')[0]} #fun eh?
+        if not matched:
+            #reaching here means the data wasn't found in the current hashStore,
+            #so store it and wait for the next
+            rmsg = {txID+'.'+self.escrowID:'SSL_DATA_RECEIVED'}
+            self.sendMessages(rmsg,sender) 
             
-        #for buyers and sellers
-        self.hashStore.update(msg)
+            #for buyers, clean out the magic hashes from the msg to be stored
+            #so that we can properly compare it with the seller's hashes
+            if role=='buyer':
+                self.magicStore.update({txID:magic_hashes})
+                msg ={msg.keys()[0]:msg.values()[0].split('^')[0]}
+                
+            #for buyers and sellers
+            self.hashStore.update(msg)
+            
+            ns = 6 if role=='buyer' else 7
+            self.transactionUpdate(txID=txID,new_state=ns)
                 
     #logic: if one of three is inconsistent, the third party is lying
     #if all three are consistent, raise dispute level to super-escrow
@@ -402,7 +475,7 @@ class EscrowAgent(Agent.Agent):
             msg={transaction.uniqID()+'.'+self.escrowID:\
 'DISPUTE_L1_ADJUDICATION:awarded to buyer, seller\'s ssl record is invalid'}
             #insert bitcoin transfer TODO
-            self.transactionUpdate(txID=transaction.uniqID(),new_state='COMPLETE')
+            self.transactionUpdate(txID=transaction.uniqID(),new_state=9)
             for recipient in [buyer,seller]:
                 self.sendMessages(msg,recipient)
                 
@@ -410,28 +483,30 @@ class EscrowAgent(Agent.Agent):
             msg={transaction.uniqID()+'.'+self.escrowID:\
 'DISPUTE_L1_ADJUDICATION:awarded to seller, buyer\'s ssl record is invalid'}
             #insert bitcoin transfer TODO
-            self.transactionUpdate(txID=transaction.uniqID(),new_state='COMPLETE')
+            self.transactionUpdate(txID=transaction.uniqID(),new_state=10)
             for recipient in [buyer,seller]:
                 self.sendMessages(msg,recipient)
                 
         elif buyer_hash_list == seller_hash_list: #in this case, we don't need to check escrow
             msg={transaction.uniqID()+'.'+self.escrowID:\
 'DISPUTE_L1_ADJUDICATION_FAILURE: ssl data is consistent - dispute escalated to super escrow'}
-            #TODO: additional transaction state , L2 dispute
             for recipient in [buyer,seller,self.superEscrow]:
                 self.sendMessages(msg,recipient)
+            self.transactionUpdate(tx=transaction,new_state=12)
         else:
             msg = {transaction.uniqID()+'.'+self.escrowID:\
 'DISPUTE_L1_ADJUDICATION_FAILURE:all three ssl data records are inconsistent'}
-            #TODO: additional transaction state , L2 dispute
+            #This is a catastrophic failure of the system; TODO prob. escalate
             for recipient in [buyer,seller,self.superEscrow]:
                 self.sendMessages(msg,recipient)
+            self.transactionUpdate(tx=transaction,new_state=11)
         shared.debug(0,["Mismatches between buyer and seller:", \
         set(buyer_hash_list).symmetric_difference(set(seller_hash_list))])
         shared.debug(0,["Mismatches between buyer and escrow:", \
         set(buyer_hash_list).symmetric_difference(set(my_hash_list))])
         shared.debug(0,["Mismatches between seller and escrow:", \
-        set(my_hash_list).symmetric_difference(set(seller_hash_list))])        
+        set(my_hash_list).symmetric_difference(set(seller_hash_list))]) 
+               
     #this method collects all messages addressed to this agent
     def collectMessages(self):
         msgs = Msg.collectMessages(self.escrowID)
