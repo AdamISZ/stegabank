@@ -30,9 +30,6 @@ class EscrowAgent(Agent.Agent):
         #in case of escalation to human adjudication
         self.superEscrow = 'adam111'
         
-        #temporary buffer for all messages brought down from MQs
-        self.messageBuffer={}
-        
         #this  needs to be persisted as it contains
         #state information - in order to accept requests involving two parties,
         #the escrow needs to keep a record of earlier requests downloaded
@@ -48,14 +45,15 @@ class EscrowAgent(Agent.Agent):
         #the main loop to be called for the daemon meaning we're
         #listening for messages/requests/instructions from useragents.
         while True:
-            self.messageBuffer={}
-            self.waitForMessages(5)
-            if not self.messageBuffer: continue
+            msg = self.getSingleMessage(5)
+            if not msg:
+                shared.debug(0,["Got nothing, waiting.."])
+                continue
             #we received at least one message: check the headers,
             #perform the appropriate action
             shared.debug(0,["We received at least one message in the main loop:",\
-                            self.messageBuffer])
-            for k,m in self.messageBuffer.iteritems():
+                            msg])
+            for k,m in msg.iteritems():
             # this is effectively a switch/case situation.
             # may look into a more Pythonic way of doing it later TODO
                 if 'TRANSACTION_SYNC_REQUEST' in m:
@@ -72,7 +70,7 @@ class EscrowAgent(Agent.Agent):
                     
                 elif 'BANK_SESSION_START_REQUEST' in m:
                     shared.debug(0,["Found a bank session start request in the buffer"])
-                    self.processBankSessionStartRequest([k,m])
+                    self.negotiateBankSessionStartRequest([k,m])
                 
                 elif 'BANK_SESSION_ABORT' in m:
                     shared.debug(0,["Found a bank session abort instruction in the buffer"])
@@ -80,9 +78,7 @@ class EscrowAgent(Agent.Agent):
                 
                 elif 'BANK_SESSION_ENDED' in m:
                     shared.debug(0,["Found a bank session ended notification in the buffer"])
-                    #shut down the stcppipe for this run
-                    #TODO: handle process shutdown better than this!
-                    shared.local_command(['pkill', '-SIGTERM', 'stcppipe'])
+                    self.cleanUpBankSession([k,m])
                     
                 elif 'DISPUTE_L1_REQUEST' in m:
                     shared.debug(0,["Found a Level 1 dispute request in the buffer"])
@@ -96,6 +92,25 @@ class EscrowAgent(Agent.Agent):
                     shared.debug(0,["Found a ssl key delivery message in the buffer"])
                     self.receiveSSLKeysAndSendHtml([k,m])
     
+    def cleanUpBankSession(self,msg):
+        #shut down the stcppipe for this run
+        #TODO - this is obviously incompatible with multiple sessions
+        #TODO: this creates a zombie - does it matter?
+        shared.local_command(['pkill', '-SIGTERM', 'stcppipe'])
+        tx = self.getTxByID(msg[0].split('.')[0])
+        if msg[1].split(':')[1]=='n':
+            self.transactionUpdate(tx=tx,new_state=19)
+        elif msg[1].split(':')[1]=='y':
+            self.transactionUpdate(tx=tx,new_state=18)
+            
+        else:
+            shared.debug(0,["Serious error, bank session completed message in",\
+                            "wrong format"])
+        
+        #inform the seller, who may currently be confused if it didn't work
+        self.sendMessages({tx.uniqID()+'.'+\
+                        tx.seller:'BANK_SESSION_ENDED:'+msg[1].split(':')[1]},recipientID=tx.seller)
+        
     def sendTransactionSynchronization(self,msg):
         requester = msg[0].split('.')[1]
         shared.debug(0,["Requester:",requester])
@@ -123,9 +138,9 @@ class EscrowAgent(Agent.Agent):
             if t.uniqID()==txID:
                 tmptx=t
                 break
-        if tmptx.state in ['INITIALISED','UNINITIALISED']:
+        if tmptx.state in [2,1]:
             response=['accept']
-        elif tmptx.state in ['INVALID','ABORTED']:
+        elif tmptx.state in [0,3]:
             response=['accept',\
                       'no action - transaction is already aborted or invalid']
         else:
@@ -267,7 +282,7 @@ class EscrowAgent(Agent.Agent):
     #and to start their stcppipe. So a reject can be sent back to the buyer
     #if that doesn't work. The main point is that the seller should not need
     #to perform user input, only to have ssllog running.         
-    def processBankSessionStartRequest(self,request):
+    def negotiateBankSessionStartRequest(self,request):
         response=[]
         #ID of requesting agent is after the .
         requester = request[0].split('.')[1]
@@ -281,11 +296,23 @@ class EscrowAgent(Agent.Agent):
             if t.uniqID()==txID:
                 buyerID,sellerID = [t.buyer, t.seller]
                 #include state 19 as a possible restart after a failure
-                if t.state not in [2,19]:
+                if t.state not in [2,17,19]:
                     response = ['reject','transaction is not in a state ready \
                                 to do banking session']
                 else:
-                    #check that proxy is running?TODO
+                    self.sendMessages({t.uniqID()+'.'+t.seller:\
+                        'BANK_SESSION_START_REQUEST:'},recipientID=t.seller)
+                    msg = self.getSingleMessage(20)
+                    if not msg:
+                        response = ['reject','seller is not responding']
+                        break
+                    elif 'BANK_SESSION_READY' not in msg.values()[0]:
+                        response = ['reject',\
+                        'seller did not respond to request to start banking']
+                        break
+                    
+                    #seller is ready if we got here
+                    
                     self.transactionUpdate(tx=self.transactions[i],new_state=17)
     
                     #TODO: killing pre-existing pipes here is only valid
@@ -299,9 +326,8 @@ class EscrowAgent(Agent.Agent):
                     stcpd, '-b','127.0.0.1', g("Escrow","escrow_stcp_port"),\
                     g("Escrow","escrow_input_port")],bg=True)
                     message = {txID+'.'+self.escrowID:'BANK_SESSION_START_ACCEPTED:'}
-                    #send acceptance to both parties involved
-                    for recipientID in [buyerID,sellerID]:
-                        self.sendMessages(message,recipientID)
+                    #send acceptance to buyer
+                    self.sendMessages(message,buyerID)
                     return True
                     
         if response[0]=='reject':
@@ -315,11 +341,6 @@ class EscrowAgent(Agent.Agent):
             shared.debug(0,["something seriously wrong here"])
             exit(1)
         
-            
-            
-    def sendMessages(self,messages,recipientID,transaction=None):
-        return Msg.sendMessages(messages,recipientID)
-    
     #request ssl hashes from counterparties, wait for a return
     #and check against escrow's own record. Adjudicate on that basis.
     def requestSSLHashes(self,request):
@@ -507,26 +528,44 @@ class EscrowAgent(Agent.Agent):
         shared.debug(0,["Mismatches between seller and escrow:", \
         set(my_hash_list).symmetric_difference(set(seller_hash_list))]) 
                
-    #this method collects all messages addressed to this agent
-    def collectMessages(self):
-        msgs = Msg.collectMessages(self.escrowID)
-        shared.debug(0,["Here are the messages collected:",msgs])
-        if not msgs: 
-            return None
-        else:
-            self.messageBuffer=msgs
-            return True
+#========MESSAGING FUNCTIONS======================                
+    def sendMessages(self,messages={},recipientID='',transaction=None):
+        recipientID = self.uniqID if recipientID == '' else recipientID
         
-    def waitForMessages(self,timeout):
-        for x in range(1,timeout):
-            if (self.collectMessages()):
-                return True
-            time.sleep(2)
-        shared.debug(1,["Waiting for messages timed out"])
-        return False
+        #this standardised way will work if we have only one message
+        if transaction:
+            messages = {transaction.uniqID()+'.'+self.agent.uniqID():messages.values()[0]}
         
+        shared.debug(0,["About to send a message to",recipientID])
+        return Msg.sendMessages(messages,recipientID=recipientID)
+    
+    def getSingleMessage(self,timeout=1):
+        return Msg.getSingleMessage(self.escrowID,timeout)
+    
+    
     def providePort(self):
         #TODOcode to provide a currently unused port for concurrent transactions
         #this seems like it could be tricky
         #for now, static
         return g("Escrow","escrow_input_port")
+        
+#Hopefully defunct:
+'''
+    def collectMessages(self):
+        msgs = Msg.collectMessages(self.agent.uniqID())
+        if not msgs: 
+            return None
+        else:
+            return msgs
+        
+    def waitForMessages(self,timeout):
+        for x in range(1,timeout):
+            if (self.collectMessages()):
+                return True
+            time.sleep(1)
+        shared.debug(1,["Waiting for messages timed out"])
+        return False
+'''    
+         
+
+    

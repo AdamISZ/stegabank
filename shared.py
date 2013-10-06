@@ -77,7 +77,8 @@ def send_files_remote(remote_dir,local_files,login,agent,dir=True):
 #pretty self-explanatory - assuming it works!
 def kill_processes(procs):
     for proc in procs:
-        proc.kill()
+        if (proc):
+            proc.kill()
         
 #note: local_command takes input argument command as a LIST
 def local_command(command,bg=False,redirect=''):

@@ -9,7 +9,7 @@ from AppLayer.UserAgent import UserAgent
 def g(x,y):
     return shared.config.get(x,y)
     
-class EscrowAccessor():
+class EscrowAccessor(object):
     #note that certain information will have to be retrieved to access escrow
     def __init__(self,agent,host='',username='',password='',port='',escrowID=''):
         print "instantiating a remote escrow accessor"
@@ -84,7 +84,7 @@ class EscrowAccessor():
             
             #in this section we'll break the rule of not updating the tx
             #list directly because we commit at the end.
-            if tx in self.agent.transactions:
+            if tx.uniqID() in [a.uniqID() for a in self.agent.transactions]:
                 #replace old with new
                 self.agent.transactions = [tx if x.uniqID()==tx.uniqID() \
                                     else x for x in self.agent.transactions]
@@ -93,6 +93,7 @@ class EscrowAccessor():
                 #Completely new transaction, unknown to user.
                 #This usually won't happen; it means the useragent has "lost"
                 #a transaction object
+                shared.debug(0,["We're adding a new one"])
                 self.agent.transactions.append(tx)
                 
         #finished making changes, persist
@@ -106,38 +107,7 @@ class EscrowAccessor():
         self.agent.printCurrentTransactions()
         
         return True
-                
-    def sendMessages(self,messages={},recipientID='',transaction=None):
-        recipientID = self.uniqID if recipientID == '' else recipientID
-        
-        #this standardised way will work if we have only one message
-        if transaction:
-            messages = {transaction.uniqID()+'.'+self.agent.uniqID():messages.values()[0]}
-        
-        shared.debug(0,["About to send a message to",recipientID])
-        return Msg.sendMessages(messages,recipientID=recipientID)
-        
-    
-    #this method collects all messages addressed to the user specified
-    #by recipientID (which should be the useragent id who owns this accessor)
-    def collectMessages(self):
-        msgs = Msg.collectMessages(self.agent.uniqID())
-        if not msgs: 
-            return None
-        else:
-            return msgs
-        
-    def waitForMessages(self,timeout):
-        for x in range(1,timeout):
-            if (self.collectMessages()):
-                return True
-            time.sleep(1)
-        shared.debug(1,["Waiting for messages timed out"])
-        return False
-    
-    def getSingleMessage(self,timeout=1):
-        return Msg.getSingleMessage(self.agent.uniqID(),timeout)
-        
+
     def requestTransaction(self,buyer,seller,amount,price,curr):
         #construct a message to the escrow
         shared.debug(0,["About to request a transaction"])
@@ -207,18 +177,28 @@ class EscrowAccessor():
         accepted=0
         smsg = self.getSingleMessage(timeout=1000)
         if not smsg:
-            shared.debug(0,["timed out waiting for the bank session start accept message"])
-            exit(1)
+            shared.debug(0,["timed out waiting for the bank session start message"])
+            return False
         
         for k,m in smsg.iteritems():
-            if 'BANK_SESSION_START_ACCEPTED' in m and tx.uniqID() in k:
+            #check for a bank session ended message
+            if 'BANK_SESSION_ENDED:y' in m and tx.uniqID() in k:
+                shared.debug(0,["Err how did that happen?"])
+                exit(1)
+            elif 'BANK_SESSION_ENDED:n' in m and tx.uniqID() in k:
+                return False
+            elif 'BANK_SESSION_START_REQUEST' in m and tx.uniqID() in k:
+                self.sendMessages(messages={tx.uniqID()+'.'+self.agent.uniqID():\
+                'BANK_SESSION_READY:'},recipientID=self.uniqID)
+                accepted=1
+            elif 'BANK_SESSION_START_ACCEPTED' in m and tx.uniqID() in k:
                 accepted=1
             elif 'BANK_SESSION_START_REJECTED' in m and tx.uniqID() in k:
                 accepted=-1
                 
         if accepted==-1:    
             shared.debug(0,["Our bank session was rejected :( - quitting."])
-            exit(1)    
+            return False    
         elif accepted==1:
             shared.debug(1,["Bank session was accepted by escrow."])
             self.agent.transactionUpdate(tx=tx,new_state=4)
@@ -238,10 +218,18 @@ class EscrowAccessor():
             shared.debug(0,["Got this message:",smsg])
             for k,m in smsg.iteritems():
                 if 'BANK_SESSION_ENDED' in m:
-                    return True
+                    if ':y' in m:
+                        return True
+                    elif ':n' in m:
+                        return False
+                    else:
+                        shared.debug(0,["Serious error in wait for bank session",\
+                                        "end, message format wrong."])
+                        return False
+                   
     
     #this message is to be used by buyers only
-    def sendConfirmationBankingSessionEnded(self,tx):
+    def sendConfirmationBankingSessionEnded(self,tx,rspns):
         #sanity check
         if tx.getRole(self.agent.uniqID()) != 'buyer':
             shared.debug(0,["Error: user agent:",self.agent.uniqID(),\
@@ -252,7 +240,8 @@ class EscrowAccessor():
         shared.debug(0,["Sending bank session end confirm to seller and escrow"])
         tx_rq_key = tx.uniqID()+'.'+self.agent.uniqID()
         #todo: handle numeric conversions with appropriate accuracy
-        tx_rq_msg = {tx_rq_key:'BANK_SESSION_ENDED'}
+        
+        tx_rq_msg = {tx_rq_key:'BANK_SESSION_ENDED:'+rspns}
         for recipient in [self.uniqID,tx.seller]:
             self.sendMessages(tx_rq_msg,recipient)
     
@@ -286,3 +275,47 @@ class EscrowAccessor():
                     shared.debug(0,["The escrow-oracle successfully reached",\
     "a decision and made an award."])
                     return m.split(':')[-1].split(',')
+    
+#========MESSAGING FUNCTIONS======================                
+    def sendMessages(self,messages={},recipientID='',transaction=None):
+        recipientID = self.uniqID if recipientID == '' else recipientID
+        
+        #this standardised way will work if we have only one message
+        if transaction:
+            messages = {transaction.uniqID()+'.'+self.agent.uniqID():messages.values()[0]}
+        
+        shared.debug(0,["About to send a message to",recipientID])
+        return Msg.sendMessages(messages,recipientID=recipientID)
+        
+    
+    #this method collects all messages addressed to the user specified
+    #by recipientID (which should be the useragent id who owns this accessor)
+    def collectMessages(self):
+        msgs = Msg.collectMessages(self.agent.uniqID())
+        if not msgs: 
+            return None
+        else:
+            return msgs
+        
+    def waitForMessages(self,timeout):
+        for x in range(1,timeout):
+            if (self.collectMessages()):
+                return True
+            time.sleep(1)
+        shared.debug(1,["Waiting for messages timed out"])
+        return False
+    
+    def getSingleMessage(self,timeout=1):
+        return Msg.getSingleMessage(self.agent.uniqID(),timeout)
+        self.sendMessages(messages={'0.'+self.agent.uniqID():\
+                                    'CLIENT_ALIVE_REQUEST:'},recipientID=counterparty)
+        msg = self.getSingleMessage(timeout=30)
+        if not msg:
+            return False
+        if not 'CLIENT_ALIVE_RESPONSE' in msg.values()[0]:
+            return False
+        return True
+    
+    #def respondToAliveRequest(self, counterparty):
+        
+#============END MESSAGING FUNCTIONS===============================

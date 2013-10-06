@@ -45,11 +45,11 @@ class Agent(object):
                     raise Exception("you called transactionUpdate without"+\
                                 "specifying a transaction! Doh!")
                 tx = self.getTxByID(txID)
-
+            
             index = next((i for i in range(0,len(self.transactions)) \
                     if self.transactions[i].uniqID()==tx.uniqID()),None)
-            
-            if not index: #means this is a new transaction; add it
+            #bugfix 6 Oct; zero counts as false!!
+            if index is None: #means this is a new transaction; add it
                 self.transactions.append(tx)
                 if not new_state:
                     raise Exception("You cannot add a transaction with no state!")
@@ -71,13 +71,14 @@ class Agent(object):
             pickle.dump(self.transactions,f)
             shared.debug(0,["Dumped contents of transaction to file"])
             
-            
     #print out all transactions, indexed, to stdout
     def printCurrentTransactions(self):
         print "**Current Transactions in your transaction store:**"
         for i in range(0,len(self.transactions)):
             print "[",str(i),"] - ",self.transactions[i].uniqID(),\
-            "Buyer:",self.transactions[i].buyer,"Seller:",self.transactions[i].seller
+            "Buyer:",self.transactions[i].buyer,"Seller:",\
+            self.transactions[i].seller, "Current state:", \
+            self.transactions[i].state
     
     #self-expl
     def getTxByID(self,txID):

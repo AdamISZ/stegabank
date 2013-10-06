@@ -42,7 +42,7 @@ class UserAgent(Agent.Agent):
         #tx.state must be in one of the 'pending' states:4,17,19,12,5 
         
         if tx.state in [4,17,19]:
-            self.doBankingSession()
+            self.doBankingSession(tx)
             
         elif tx.state==5 or (tx.getRole(self.uniqID())=='buyer' and tx.state==7) \
             or (tx.getRole(self.uniqID())=='seller' and tx.state==6):
@@ -60,11 +60,11 @@ class UserAgent(Agent.Agent):
             #user to choose one or more key numbers
             keydir = os.path.join(g("Directories",tx.getRole(self.uniqID())+"_base_dir"),\
             '_'.join(tx.getRole(self.uniqID()),tx.uniqID(),"banksession","keys"))
-            print "You have chosen to send ssl keys to the escrow. \
-            Do this carefully. Check the folder: ", keydir ," and \
-            decide which key number or numbers to send by looking at the \
-            corresponding html in the html directory, then enter those \
-            numbers here one by one at the prompt. When finished, type 0."
+            print ("You have chosen to send ssl keys to the escrow."
+            "Do this carefully. Check the folder: ", keydir ," and "
+            "decide which key number or numbers to send by looking at the "
+            "corresponding html in the html directory, then enter those "
+            "numbers here one by one at the prompt. When finished, type 0.")
             #get a listing of all valid key files
             all_keys = os.listdir(keydir)
             requested_keys=[]
@@ -184,17 +184,18 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
             g("Seller","seller_input_port")],bg=True)
          
          #we must return to confirm success in startup of net arch
-        return True   
-    
-    def endBankingSession(self,transaction):
+        return True 
+      
+    #the argument rspns indicates whether or not the banking session 
+    #was successful
+    def endBankingSession(self,transaction,rspns):
         
         #tear down network connections
         shared.kill_processes([self.ssh_proc,self.stcppipe_proc])
         
         role = transaction.getRole(self.uniqID())
         
-        if role=='buyer':
-            #get rid of the pipes
+        if role=='buyer' and rspns=='y':
             #copy the premaster secrets file into the testing directory
             #so that it can be decrypted at a later stage by the buyer
             runID='_'.join([role,transaction.uniqID(),'banksession'])
@@ -202,7 +203,6 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
                                          runID,runID+'.keys')
             shutil.copy2(self.keyFile,key_file_name)
             transaction.keyFile = key_file_name
-            self.transactionUpdate(tx=transaction,new_state='IN_PROCESS')
             
             #TODO: consider how in the transaction model, the keyFile
             #info is/is not propagated to the escrow, who after all must
@@ -235,6 +235,9 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
             #to send, in case there's a dispute, and he'll only send the 
             #key(s) that correspond to that html
             
+        new_state = 18 if rspns=='y' else 19
+        self.transactionUpdate(tx=transaction,new_state=new_state)
+                
     #this method is at useragent level only as it's only for buyers
     #see details in sharkutils.get_magic_hashes
     def getMagicHashList(self, tx):
@@ -259,8 +262,10 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
     
         #wait for response - same for both parties at least in this script.
         if not self.activeEscrow.getResponseToBankSessionStartRequest(tx):
-            shared.debug(0,["Timed out waiting for banking session to be started."])
-            exit(1)
+            shared.debug(0,["The banking session failed to start or finish"\
+                            "properly, unfortunately. Returning to menu."])
+            self.endBankingSession(tx,'n')
+            return
 
         if role=='seller':
             rspns = shared.get_binary_user_input(\
@@ -301,8 +306,10 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
             exit(1)
     
         if role=='buyer':
-            print "When firefox starts, please perform internet banking." +\
-            "\n When you have finished, please close firefox."
+            print ("When firefox starts, please perform internet banking."
+            "If you can't connect, please close the browser."
+            "If you can connect, then when you have finished your internet"
+            "banking, please close firefox.")
             time.sleep(5)
             shared.local_command([g("Exepaths","firefox_exepath")],bg=True)
         
@@ -313,9 +320,12 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
             #TODO: this will need some serious 'refactoring'!
             ffname = os.path.basename(g("Exepaths","firefox_exepath"))
             shared.wait_for_process_death(ffname)
-        
+            
+            rspns = shared.get_binary_user_input("Did you complete the payment successfully?",\
+                                         'y','y','n','n')
+            
             #we have finished our banking session. We need to tell the others.
-            self.activeEscrow.sendConfirmationBankingSessionEnded(tx)
+            self.activeEscrow.sendConfirmationBankingSessionEnded(tx,rspns)
             #if we shut down python immediately the connection is dropped 
             #and the message gets dropped! Ouch, what a bug!TODO
             time.sleep(10)
@@ -329,7 +339,7 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
             shared.debug(0,["The banking session is finished."])
     
         #final cleanup - for now only storing the premaster keys
-        self.endBankingSession(tx)
+        self.endBankingSession(tx,rspns)
         
     #unused for now
     def findEscrow(self):
