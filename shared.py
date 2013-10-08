@@ -12,10 +12,22 @@ import helper_startup
 import psutil
 
 config = ConfigParser.ConfigParser()
-helper_startup.loadconfig()
+
+#====GLOBALS====================
 OS = platform.system()
 PINL = '\r\n' if OS == 'Windows' else '\n'
 hexdigits = set('0123456789abcdefABCDEF')
+#controller of transaction state transitions (v=valid)
+#the value of encoding this is that we can greate a generic call
+#to validate whether messages coming into the escrow are asking for something
+#that is possible, and reject those actions if not. This mitigates 
+#concurrency and synchronization issues.
+vtst={100:[],200:[201,202,300,400],201:[300,400],202:[300,400],300:[400,500],400:[],\
+      500:[501,502],501:[300,400],502:[600,601,700],600:[],601:[],\
+      700:[600,601,700,701,702,703],701:[703],702:[703],703:[704,705,706],704:[],\
+      705:[],706:[800],800:[801,804],801:[802],802:[803,804],803:[],804:[]}
+#====END GLOBALS==============
+
 
 #v. simple, just give me that directory whether it exists yet or not!
 def makedir(dirlist):

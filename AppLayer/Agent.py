@@ -39,6 +39,15 @@ class Agent(object):
     #if it's not, the transaction will be deleted from the store
     #TODO a bit more error handling - cannot hand a txID with a new tx!
     def transactionUpdate(self, full=False, txID='',tx=None,new_state=''):
+        #a little error checking:
+        if new_state:
+            try:
+                new_state = int(new_state)
+            except:
+                shared.debug(0,["Critical error: we tried to update a transaction",\
+                                "to a non-integer state! Quitting."])
+                exit(1)
+            
         if not full:
             if not tx:
                 if not txID:
@@ -48,6 +57,7 @@ class Agent(object):
             
             index = next((i for i in range(0,len(self.transactions)) \
                     if self.transactions[i].uniqID()==tx.uniqID()),None)
+            shared.debug(0,["Set index to:",index,"for transaction:",tx.uniqID()])
             #bugfix 6 Oct; zero counts as false!!
             if index is None: #means this is a new transaction; add it
                 self.transactions.append(tx)
@@ -60,6 +70,7 @@ class Agent(object):
                     del self.transactions[index]
                 else:
                     #update the state
+                    shared.debug(0,["Updating transaction state to",new_state])
                     self.transactions[index].state = new_state
         
         #persist to file - note that persistence is definitely necessary,
@@ -82,20 +93,32 @@ class Agent(object):
     
     #self-expl
     def getTxByID(self,txID):
-        return [x for x in self.transactions if x.uniqID()==txID][0]
-            
+        if not self.transactions:
+            return None
+        else:
+            match = [x for x in self.transactions if x.uniqID()==txID]
+            if not match:
+                return None
+            else:
+                return match[0]
+                
     #keeping this as simple as possible - will return None if data wasn't collected
     def getHashList(self, tx):
         role = tx.getRole(self.uniqID())
         #TODO: this may be unsafe
         if role=='invalid':
             role='escrow'
-        hash_location = os.path.join(g("Directories",role+"_base_dir"),\
+        bds = 'escrow_base_dir' if role=='escrow' else 'agent_base_dir'
+            
+        hash_location = os.path.join(g("Directories",bds),\
                         '_'.join([role,tx.uniqID(),"banksession"]),"stcplog")
         shared.debug(0,["Trying to find the hashes in this directory:",hash_location])
-        return sharkutils.get_all_ssl_hashes_from_capfile(hash_location,\
-        stcp_flag=True,port=g(role.title(),'_'.join([role,'stcp','port'])))
-
+        if role=='escrow':
+            return sharkutils.get_all_ssl_hashes_from_capfile(hash_location,\
+        stcp_flag=True,port=g("Escrow",'escrow_stcp_port'))
+        else:
+            return sharkutils.get_all_ssl_hashes_from_capfile(hash_location,\
+        stcp_flag=True,port=g("Agent",'agent_stcp_port'))
         
     def initialiseNetwork(self):
         print "setting up network architecture"

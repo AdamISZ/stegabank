@@ -39,21 +39,13 @@ import Messaging
 
 def do_transaction(myself, role, escrow):
     
-    other = 'buyer' if role == 'seller' else 'seller'
-    
-    counterparty = UserAgent(g("Directories",other+"_base_dir"),\
-        g(other.title(),"btc_address"),g(other.title(),"bank_information"),\
-        g(other.title(),"base_currency"))
-    
-    buyer = myself if role=='buyer' else counterparty
-    seller = counterparty if role=='buyer' else myself
-    
     #the next stage - instantiate a transaction based on user input
     #when bitcoin code is ready, it will slot in here somewhere
     #use the command line to drive; ask the user what they want to do: buy/sell
     #and how much
     try:
-        
+        role = shared.get_binary_user_input("Do you want to buy(B) or sell(S)?: ",'b','buyer','s','seller')
+        ctrprty = shared.get_validated_input("Enter the bitcoin address of your counterparty: ",str)
         amount = shared.get_validated_input("Enter amount to trade: ",float)
         price = shared.get_validated_input("Enter worst acceptable price in "+\
                                         myself.baseCurrency+" per BTC: ",float)
@@ -61,6 +53,13 @@ def do_transaction(myself, role, escrow):
     except:
         shared.debug(0,["Error in command line agent execution. Quitting!"])
         exit(1)
+        
+    #TODO: don't need to enter bank info,base dir or currency info here
+    counterparty = UserAgent(g("Directories","agent_base_dir"),\
+        ctrprty,g("Agent","bank_information"),\
+        g("Agent","base_currency"))
+    buyer = myself if role=='buyer' else counterparty
+    seller = myself if role=='seller' else counterparty
     
     #make a temporary transaction object with our data to cross check 
     #with escrow response
@@ -71,7 +70,7 @@ def do_transaction(myself, role, escrow):
     #the next step (for both parties) is to wait for confirmation from the remote escrow
     #that the transaction has been accepted as valid
     if not myself.activeEscrow.getResponseToTxnRq(tx):
-        shared.debug(0,["Received no intelligible response from escrow.Quitting."])
+        shared.debug(0,["Attempt failed.Quitting."])
         exit(1)
     
     #at this stage the escrow and counterparty have confirmed that the
@@ -88,12 +87,7 @@ def do_dispute(myself,role,escrow):
     tnum = shared.get_validated_input("Choose a transaction to dispute:",int)
     tx = myself.transactions[tnum]
         
-    #a hack for testing
-    rspns =shared.get_binary_user_input("Are you the disputer?",'y','y','n','n')
-    
-    if rspns=='y':
-        shared.debug(0,["Sending dispute request"])
-        escrow.sendInitiateL1DisputeRequest(tx)
+    escrow.sendInitiateL1DisputeRequest(tx)
 
     #wait for escrow to ask for the data
     escrow.waitForSSLDataRequest(tx)
@@ -106,15 +100,12 @@ def do_dispute(myself,role,escrow):
         #need to send the magic hashes telling the escrow which other hashes
         #to ignore in the comparison
         my_ssl_data += '^'+','.join(myself.getMagicHashList(tx))
-    escrow.sendMessages(messages={'x':'SSL_DATA_SEND:'+my_ssl_data},transaction=tx)
+        
+    escrow.sendMessages(messages={'x':'SSL_DATA_SEND:'+my_ssl_data},\
+                        transaction=tx,rs=703)
+        
     
-    #wait for the escrow to respond with adjudication
-    adjudication = escrow.getL1Adjudication(tx)
-
-    shared.debug(0,["The result of adjudication was:\n The bitcoins were",\
-    "awarded to:",adjudication[0],"for this reason:",adjudication[1]])
-    time.sleep(4)
-    exit(0)
+    
 
 def do_actions_menu(myself,role,escrow,actionables):
     while True:
@@ -133,13 +124,15 @@ def do_actions_menu(myself,role,escrow,actionables):
             
 if __name__ == "__main__":
     
+    if len(sys.argv)>1:
+        config_file = sys.argv[1]
+    else:
+        config_file = 'ssllog.ini'
+        
     #Load all necessary configurations:
-    helper_startup.loadconfig()
+    helper_startup.loadconfig(config_file)
     
-    #TODO: get rid of this, it's nonsense..
-    role = shared.get_binary_user_input("Do you want to buy or sell? [B/S]",\
-                                            'b','buyer','s','seller')
-    
+    role='agent'
     #instantiate my instance of UserAgent
     myself = UserAgent(g("Directories",role+"_base_dir"),\
         g(role.title(),"btc_address"),g(role.title(),"bank_information"),\
@@ -171,19 +164,21 @@ if __name__ == "__main__":
     while True:
         print ("""Please choose an option:
         [1] List current transactions
-        [2] Start a new transaction
-        [3] Dispute an existing transaction
-        [4] Act on existing unresolved transactions
+        [2] Start a new transaction and do internet banking
+        [3] Dispute an existing transaction and send your ssl records
+        [4] List existing unresolved transactions
         [5] Exit
         """)
         choice = shared.get_validated_input("Enter an integer:",int)
         if choice==1:
-            myself.printCurrentTransactions()
+            myself.activeEscrow.synchronizeTransactions()
         elif choice == 2:
             do_transaction(myself,role,escrow)
         elif choice == 3:
             do_dispute(myself,role,escrow)
         elif choice == 4:
+            #collect issues to be actioned for each transaction
+            actionables = myself.processExistingTransactions()
             do_actions_menu(myself,role,escrow,actionables)
         elif choice == 5:
             exit(0)

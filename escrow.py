@@ -16,7 +16,7 @@ logging.getLogger('pika').setLevel(logging.DEBUG)
 if __name__ == "__main__":
     #Load all necessary configurations:
     #========================
-    helper_startup.loadconfig()
+    helper_startup.loadconfig('ssllog.ini')
     
     #In the next section we instantiate the escrow agent object
     myself = EscrowAgent(g("Directories","escrow_base_dir"),\

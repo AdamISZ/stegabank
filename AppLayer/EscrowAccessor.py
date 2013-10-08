@@ -45,7 +45,7 @@ class EscrowAccessor(object):
             if not msg:
                 break
             
-        self.sendMessages({'0.'+self.agent.uniqID():'TRANSACTION_SYNC_REQUEST'},\
+        self.sendMessages({'0.'+self.agent.uniqID():'TRANSACTION_SYNC_REQUEST:'},\
                           self.uniqID)
         
         while True:
@@ -113,7 +113,7 @@ class EscrowAccessor(object):
         shared.debug(0,["About to request a transaction"])
         tx_rq_key = '0.'+self.agent.uniqID()
         #todo: handle numeric conversions with appropriate accuracy
-        tx_rq_msg = {tx_rq_key:'TRANSACTION_REQUEST:'+','.join([buyer.uniqID(),\
+        tx_rq_msg = {tx_rq_key:'TRANSACTION_REQUEST:300,'+','.join([buyer.uniqID(),\
                                     seller.uniqID(),str(amount),str(price),str(curr)])}
                                                                
         self.sendMessages(tx_rq_msg)
@@ -147,7 +147,7 @@ class EscrowAccessor(object):
                          
             for k,m in smsg.iteritems():
                 if 'TRANSACTION_ACCEPTED:' in m:
-                    if 'TRANSACTION_ACCEPTED:'+','.join([tx.buyer,tx.seller,\
+                    if ','.join([tx.buyer,tx.seller,\
                     str(tx.amount),str(tx.price),tx.currency]) in m:
                         #we need to have the same creation time as the escrow
                         #to ensure the same uniqueID; remember Python is pass-by-ref
@@ -156,57 +156,85 @@ class EscrowAccessor(object):
                         shared.debug(1,["Transaction was accepted by escrow."])
                         #the transaction should now be added to the persistent
                         #store;
-                        self.agent.transactionUpdate(tx=tx,new_state=2)
+                        self.agent.transactionUpdate(tx=tx,new_state=300)
                         return True
                     else:
                         shared.debug(0,["message about the wrong transaction:",\
                                 k,m,"-ignoring"])
                 elif 'TRANSACTION_REJECTED' in m:
                     shared.debug(0,["Our transaction was rejected :( - quitting."])
-                    exit(1)
+                    return False
     
     def requestBankSessionStart(self, tx):
         #construct a message to the escrow
         shared.debug(0,["About to request a banking session start"])
-        tx_rq_key = tx.uniqID()+'.'+self.agent.uniqID()
         #todo: handle numeric conversions with appropriate accuracy
-        tx_rq_msg = {tx_rq_key:'BANK_SESSION_START_REQUEST'}
-        self.sendMessages(tx_rq_msg)
+        tx_rq_msg = {'x':'BANK_SESSION_START_REQUEST:'}
+        self.sendMessages(tx_rq_msg,transaction=tx,rs=500)
         
-    def getResponseToBankSessionStartRequest(self,tx):
+    def negotiateBankSession(self,tx):
         accepted=0
+        role = tx.getRole(self.agent.uniqID())
+        
         smsg = self.getSingleMessage(timeout=1000)
+        k,m = smsg.items()[0]
+        
         if not smsg:
-            shared.debug(0,["timed out waiting for the bank session start message"])
+            debugmsg = \
+'Failed to get a response, probably the seller is not ready. Aborting' \
+if role=='buyer' else \
+'Failed to get a request to start the bank session from buyer, perhaps they\'re not ready.'
+            shared.debug(0,[debugmsg])
             return False
         
-        for k,m in smsg.iteritems():
-            #check for a bank session ended message
-            if 'BANK_SESSION_ENDED:y' in m and tx.uniqID() in k:
-                shared.debug(0,["Err how did that happen?"])
-                exit(1)
-            elif 'BANK_SESSION_ENDED:n' in m and tx.uniqID() in k:
+        if role=='buyer':
+            #we were waiting for an accepted/rejected message:
+            if 'BANK_SESSION_START_ACCEPTED' in m:
+                rspns = shared.get_binary_user_input("Enter Y/y to start banking session",\
+                                        'y','y','n','n')
+                if rspns != 'y':
+                    self.activeEscrow.sendBankingSessionAbortInstruction(tx)
+                    rspns = shared.get_binary_user_input("Do you want to abort the "+\
+"transaction entirely? If Y/y, the record of the transaction will be erased on"+\
+"the remote escrow. If N/n, the transaction will remain in an initialised "+\
+"state, waiting for you to conduct the banking session later.",'y','y','n','n')
+                    if rspns=='y':
+                        self.activeEscrow.sendTransactionAbortInstruction(tx)
+                    return False
+                else:
+                    return True
+            elif 'BANK_SESSION_START_REJECTED' in m:
+                shared.debug(0,["Bank session start rejected. Try again?"])
                 return False
-            elif 'BANK_SESSION_START_REQUEST' in m and tx.uniqID() in k:
-                self.sendMessages(messages={tx.uniqID()+'.'+self.agent.uniqID():\
-                'BANK_SESSION_READY:'},recipientID=self.uniqID)
-                accepted=1
-            elif 'BANK_SESSION_START_ACCEPTED' in m and tx.uniqID() in k:
-                accepted=1
-            elif 'BANK_SESSION_START_REJECTED' in m and tx.uniqID() in k:
-                accepted=-1
-                
-        if accepted==-1:    
-            shared.debug(0,["Our bank session was rejected :( - quitting."])
-            return False    
-        elif accepted==1:
-            shared.debug(1,["Bank session was accepted by escrow."])
-            self.agent.transactionUpdate(tx=tx,new_state=4)
-            return True
+            else:
+                shared.debug(0,["Received an unexpected message from the escrow. Ignoring"])
+                return False
+        else:
+            #we wait for a request message, then send a ready message.
+            if 'BANK_SESSION_START_REQUEST' in m:
+                rspns = shared.get_binary_user_input(\
+"Enter Y/y after you have started the proxy server (squid) on your local machine:",\
+        'y','y','n','n')
+                if rspns != 'y':
+                    shared.debug(0,["You have rejected the banking session. "+\
+                            "Abort instruction will be sent."])
+                    self.activeEscrow.sendBankingSessionAbortInstruction(tx)
+                    rspns = shared.get_binary_user_input("Do you want to abort the "+\
+"transaction entirely? If Y/y, the record of the transaction will be erased on"+\
+"the remote escrow. If N/n, the transaction will remain in an initialised "+\
+"state, waiting for you to conduct the banking session later.",'y','y','n','n')
+                    if rspns=='y':
+                        self.activeEscrow.sendTransactionAbortInstruction(tx)
+                    return False
+                else:        
+                    self.sendMessages(messages={'x':'BANK_SESSION_READY:'},\
+                        recipientID=self.uniqID,transaction=tx,rs=500)
+                    #seller has at this point made his best effort, he's ready to do
+                    #the business
+                    return True
             
-        if not accepted:
-            shared.debug(0,["Failed to get the bank session response after a long wait."])
-            return False
+        #unreachable, should be
+        return False
         
     def waitForBankingSessionEnd(self,tx):
         while True:
@@ -218,10 +246,10 @@ class EscrowAccessor(object):
             shared.debug(0,["Got this message:",smsg])
             for k,m in smsg.iteritems():
                 if 'BANK_SESSION_ENDED' in m:
-                    if ':y' in m:
-                        return True
-                    elif ':n' in m:
+                    if ':501' in m:
                         return False
+                    elif ':502' in m:
+                        return True
                     else:
                         shared.debug(0,["Serious error in wait for bank session",\
                                         "end, message format wrong."])
@@ -240,13 +268,13 @@ class EscrowAccessor(object):
         shared.debug(0,["Sending bank session end confirm to seller and escrow"])
         tx_rq_key = tx.uniqID()+'.'+self.agent.uniqID()
         #todo: handle numeric conversions with appropriate accuracy
-        
-        tx_rq_msg = {tx_rq_key:'BANK_SESSION_ENDED:'+rspns}
+        rs = 502 if rspns=='y' else 501
+        tx_rq_msg = {'x':'BANK_SESSION_ENDED:'}
         for recipient in [self.uniqID,tx.seller]:
-            self.sendMessages(tx_rq_msg,recipient)
+            self.sendMessages(tx_rq_msg,recipient,transaction=tx,rs=rs)
     
     def sendInitiateL1DisputeRequest(self, tx):
-        msg = {tx.uniqID()+'.'+self.agent.uniqID():'DISPUTE_L1_REQUEST'}
+        msg = {tx.uniqID()+'.'+self.agent.uniqID():'DISPUTE_L1_REQUEST:700,'}
         self.sendMessages(msg)
     
     def waitForSSLDataRequest(self, tx):
@@ -277,12 +305,24 @@ class EscrowAccessor(object):
                     return m.split(':')[-1].split(',')
     
 #========MESSAGING FUNCTIONS======================                
-    def sendMessages(self,messages={},recipientID='',transaction=None):
+    def sendMessages(self,messages={},recipientID='',transaction=None,rs=0):
         recipientID = self.uniqID if recipientID == '' else recipientID
         
-        #this standardised way will work if we have only one message
+        #this standardised way is the preferable way to send messages
+        #with format set automatically
         if transaction:
-            messages = {transaction.uniqID()+'.'+self.agent.uniqID():messages.values()[0]}
+            if rs==0:
+                shared.debug(0,["Critical error, you tried to use the automatic",\
+                                "message construction feature without setting",\
+                                "the requested state field. Quitting."])
+                exit(1)
+                
+            m = messages.values()[0].split(':')[0]+':'+str(rs)
+            if len(messages.values()[0].split(':'))>1:
+                m+=','
+                m += ','.join(messages.values()[0].split(':')[1].split(','))
+                
+            messages = {transaction.uniqID()+'.'+self.agent.uniqID():m}
         
         shared.debug(0,["About to send a message to",recipientID])
         return Msg.sendMessages(messages,recipientID=recipientID)

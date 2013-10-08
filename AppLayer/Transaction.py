@@ -15,27 +15,47 @@ class Transaction():
         
         self.buyer=buyerID
         self.seller=sellerID
+        
         #self.escrow=escrow
         self.amount=amount
         self.price=price #need to consider fiat currency: TODO
         self.currency=currency
+        
         #?
         self.escrowBTCAddress = ''#escrow.getBTCAddress()
+        
         self.multisigAddress = ''#requestMultisigAddress()
-        #
-        self.creationTime = int(time.time())
+        
+        #This was removed from initialisation for the following reason:
+        #we need to maintain state of uninitialised transactions to prevent
+        #buyer and seller having to synchronize in creating it. This means
+        #we want to set the creation time to the time when both agreed.
+        self.creationTime = ''
+        
         #state machine described above
         self.state = state
+        
         #locally stored key file with all keys for this transaction
         #set by buyer only at end of banking session
         self.keyFile=''
         
+        #hashes used for dispute TODO: probably not practical, should be a pointer not an actual data set
+        self.buyerHashes = []
+        self.magicHashes = []
+        self.sellerHashes=[]
+        
+    def initialize(self):
+        self.creationTime=int(time.time()) #to the nearest second, since the epoch
+            
     def requestMultisigAddress(self):
         print "creating a multisig address for transaction: \n",self
     
-    #Need timestamp to ensure uniqueness
+    #Need timestamp to ensure uniqueness for fully instantiated txns
     def uniqID(self):
-        return hashlib.md5(self.seller+self.buyer+str(self.creationTime)).hexdigest()
+        if self.creationTime:
+            return hashlib.md5(self.seller+self.buyer+str(self.creationTime)).hexdigest()
+        else:
+            return hashlib.md5(self.seller+self.buyer).hexdigest()
     
     def getRole(self,agentID):
         if agentID==self.buyer: return 'buyer'

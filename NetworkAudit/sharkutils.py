@@ -50,6 +50,11 @@ def tshark(infile, field='', filter='', frames=[],options=[]):
 def tshark_inner(infile, field='', filter='', frames=[],options=[]):
     tshark_exepath =  g("Exepaths","tshark_exepath")
     args = [tshark_exepath,'-r',infile] 
+    local_options = options
+    #bug discovered 8 Oct 2013: if trying to decrypt,will not
+    #work unless the port is recognised as a tcp port in the Wireshark options
+    local_options.append('http.tcp.port:80,3128,'+g("Escrow","escrow_stcp_port")+','\
+    +g("Agent","agent_stcp_port"))
     
     if (frames and not filter): 
         args.extend(['-Y', 'frame.number==' + ' or frame.number=='.join(frames)])
@@ -60,8 +65,8 @@ def tshark_inner(infile, field='', filter='', frames=[],options=[]):
         if (filter):
             args.extend(['-Y',filter])
     
-    if (options):
-        for option in options:
+    if (local_options):
+        for option in local_options:
             if (option):
                 args.extend(['-o',option])
                     

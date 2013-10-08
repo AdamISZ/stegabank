@@ -7,13 +7,14 @@ tm = {}
 #TODO: This loading function currently assumes that 
 #the config file is called "ssllog.ini" and that it's
 #stored in the same directory as the program code.
-def loadconfig():
+def loadconfig(config_file):
     # First try to load the config file  from the program
     # directory
     
-    shared.config.read('ssllog.ini')
+    shared.config.read(config_file)
     
-    #load the transaction map
+    #load the transaction map; only needed to output
+    #a readable name for the transaction state
     with open('AppLayer/TransactionStateMap.txt') as f:
         l = f.readlines()
         for x in l:

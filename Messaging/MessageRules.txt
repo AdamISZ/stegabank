@@ -19,7 +19,10 @@ Messaging Protocol for the ssl log escrow server running rabbitMQ:
 
 8. The 'message' will have a format MSGTYPE:data,data,data,....
 
-9. List of MSGTYPES:
+9. If the message is not one of [TRANSACTION_SYNC_REQUEST,TRANSACTION_SYNC_RESPONSE,TRANSACTION_SYNC_COMPLETE], then the first data item in (8) MUST be a new transaction state (in case of message TO escrow, this is a request which may or may not be agreed to; in case of message FROM escrow, this is a confirmation/statement of fact).
+
+10. List of MSGTYPES:
+REQUEST_REJECTED - data are:reason
 CLIENT_ALIVE_REQUEST - data are: none
 CLIENT_ALIVE_RESPONSE - data are: none
 CLIENT_LOGON - data are: none
