@@ -125,6 +125,8 @@ class EscrowAgent(Agent.Agent):
                 t.state=300
             elif t.state==706:
                 t.state=800
+            elif t.state==801 or t.state==802:
+                t.state=800
         
         self.transactionUpdate(full=True)
         
@@ -203,10 +205,18 @@ class EscrowAgent(Agent.Agent):
         
         #send html to super escrow for adjudication TODO
         shared.debug(0,["Sending html to super escrow for this transaction"])
-        shared.debug(0,[htmlarray])
-        self.sendMessages({tx.uniqID()+'.'+self.escrowID:\
-                'DISPUTE_L2_SEND_HTML_EVIDENCE:'+','.join(htmlarray)},\
-                recipientID=self.superEscrow)
+        #shared.debug(0,[htmlarray])
+        ans = shared.get_binary_user_input("Ready?",'y','y','n','n')
+        m_k = tx.uniqID()+'.'+self.escrowID
+        for a in htmlarray:
+            '''for i in xrange(0,len(a),1000):
+                data_to_send = a[i:i+1000]
+                self.sendMessages({m_k:'DISPUTE_L2_SEND_HTML_EVIDENCE:'+\
+                            data_to_send},recipientID=self.superEscrow)'''
+            self.sendMessages({m_k:'DISPUTE_L2_SEND_HTML_EVIDENCE:'+\
+                               a},recipientID=self.superEscrow)
+            #self.sendMessages({m_k:'DISPUTE_L2_SEND_HTML_END_PAGE:'},recipientID=self.superEscrow)
+            
         self.transactionUpdate(tx=tx,new_state=802)
         
     #This function should be called when any TRANSACTION_REQUEST message

@@ -673,7 +673,7 @@ def get_all_html_from_key_file(capfile,keyfile):
         if not html_and_hash:
             continue
         html,hash = html_and_hash
-        kfhtml.append(html)
+        kfhtml.append(html.decode('utf-8'))
     #print "for keyfile:",keyfile,"got html:",html
     return kfhtml
 

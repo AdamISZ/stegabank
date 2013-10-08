@@ -88,7 +88,8 @@ def getSingleMessage(recipientID,timeout=1):
                 return None
             else:
                 msg = body.split('|')
-                return {msg[0]:msg[1]}
+                #bugfix 8 Oct 2013: there can be a | in the message!!
+                return {msg[0]:'|'.join(msg[1:])}
         
     
 #interface: the arguments must be:
