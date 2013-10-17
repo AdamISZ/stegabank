@@ -383,26 +383,24 @@ def get_magic_hashes(stcpdir,keyfile,port):
     return magic_hashes
     
 #30 Sep 2013 from dansmith; not being used at the moment except for reference
+#10 Oct 2013: updated from ds - optimised/simplified, now only returning html
 #look at tshark's ascii dump to better understand the parsing taking place
-def get_html_hash_from_ascii_dump(ascii_dump):
-    hexdigits = shared.hexdigits
+def get_html_from_ascii_dump(ascii_dump):
+    hexdigits = set('0123456789abcdefABCDEF')
     binary_html = bytearray()
 
     if ascii_dump == '':
         print 'empty frame dump'
-        return []
+        cleanup_and_exit()
+        return -1
 
     #We are interested in "Uncompressed entity body" for compressed HTML. If not present, then
     #the very last entry of "De-chunked entity body" for no-compression no-chunks HTML. If not present, then
     #the very last entry of "Reassembled SSL" for no-compression no-chunks HTML in multiple SSL segments (very rare),
     #and finally, the very last entry of "Decrypted SSL data" for no-compression no-chunks HTML in a single SSL segment.
-    already_found = False
-    dechunked_pos = -1
-    reassembled_pos = -1
-    decrypted_pos = -1
+    
     uncompr_pos = ascii_dump.rfind('Uncompressed entity body')
     if uncompr_pos != -1:
-        already_found = True
         for line in ascii_dump[uncompr_pos:].split('\n')[1:]:
             #convert ascii representation of hex into binary so long as first 4 chars are hexdigits
             if all(c in hexdigits for c in line [:4]):
@@ -410,147 +408,12 @@ def get_html_hash_from_ascii_dump(ascii_dump):
                 binary_html += m_array
             else:
                 break
-            
-    if uncompr_pos == -1 and not already_found:
-        dechunked_pos = ascii_dump.rfind('De-chunked entity body')
-        if dechunked_pos != -1:
-            already_found = True
-            for line in ascii_dump[dechunked_pos:].split('\n')[1:]:
-                #convert ascii representation of hex into binary
-                #only deal with lines where first 4 chars are hexdigits
-                if all(c in hexdigits for c in line [:4]):
-                    m_array = bytearray.fromhex(line[6:54])
-                    binary_html += m_array
-                else:
-                    break
-                
-    if dechunked_pos == -1 and not already_found:
-        reassembled_pos = ascii_dump.rfind('Reassembled SSL')
-        if reassembled_pos != -1:
-            already_found = True
-            #skip the HTTP header and find where the HTTP body starts
-            #The delimiter of header from body '0d 0a 0d 0a' can be spanned over two lines
-            #Hence the workaround
-            
-            lines = ascii_dump[reassembled_pos:].split('\n')
-            line_length = len(lines[1])+1
-            line_numbering_length = len(lines[1].split()[0])
-            hexlist = [line.split()[1:17] for line in lines[1:]]
-            #flatten the nested lists acc.to http://stackoverflow.com/questions/952914/making-a-flat-list-out-of-list-of-lists-in-python
-            flathexlist = [item for sublist in hexlist for item in sublist]
-            #convert the list into a single string
-            hexstring = ''.join(flathexlist)
-            start_pos_in_hex = hexstring.find('0d0a0d0a')+len('0d0a0d0a')
-            #Knowing that there are 16 2-char hex numbers in a single line, calculate absolute position
-            start_line_in_ascii = start_pos_in_hex/32
-            line_offset_in_ascii = (start_pos_in_hex % 32)/2
-                     
-            #The very first hex is line numbering,it is followed by 2 spaces
-            #each hex number in a line takes up 2 alphanum chars + 1 space char
-            #we skip the very first line 'Reassembled SSL ...' by finding a newline.
-            newline_offset = ascii_dump[reassembled_pos:].find('\n')
-            body_start = reassembled_pos+newline_offset+1+start_line_in_ascii*line_length+line_numbering_length+2+line_offset_in_ascii*3
-            if body_start == -1:
-                print 'Could not find HTTP body'
-                return
-            lines = ascii_dump[body_start:].split('\n')
-            #treat the first line specially
-            print lines[0]
-            binary_html += bytearray.fromhex(lines[0][:-17])
-            for line in lines[1:]:
-                #convert ascii representation of hex into binary
-                #only deal with lines where first 4 chars are hexdigits
-                if all(c in hexdigits for c in line [:4]):
-                    m_array = bytearray.fromhex(line[6:54])
-                    binary_html += m_array
-                else:
-                    break
-                
-    if reassembled_pos == -1 and not already_found:
-        decrypted_pos = ascii_dump.rfind('Decrypted SSL data')
-        if decrypted_pos != -1:
-            already_found = True
-            #skip the HTTP header and find where the HTTP body starts
-            #The delimiter of header from body '0d 0a 0d 0a' can be spanned over two lines
-            #Hence the workaround
-            
-            lines = ascii_dump[decrypted_pos:].split('\n')
-            line_length = len(lines[1])+1
-            line_numbering_length = len(lines[1].split()[0])
-            hexlist = [line.split()[1:17] for line in lines[1:]]
-            #flatten the nested lists acc.to http://stackoverflow.com/questions/952914/making-a-flat-list-out-of-list-of-lists-in-python
-            flathexlist = [item for sublist in hexlist for item in sublist]
-            #convert the list into a single string
-            hexstring = ''.join(flathexlist)
-            start_pos_in_hex = hexstring.find('0d0a0d0a')+len('0d0a0d0a')
-            #Knowing that there are 16 2-char hex numbers in a single line, calculate absolute position
-            start_line_in_ascii = start_pos_in_hex/32
-            line_offset_in_ascii = (start_pos_in_hex % 32)/2
-                     
-              #The very first hex is line numbering,it is followed by 2 spaces
-            #each hex number in a line takes up 2 alphanum chars + 1 space char
-            #we skip the very first line 'Reassembled SSL ...' by finding a newline.
-            newline_offset = ascii_dump[decrypted_pos:].find('\n')
-            body_start = decrypted_pos+newline_offset+1+start_line_in_ascii*line_length+line_numbering_length+2+line_offset_in_ascii*3
-            
-            if body_start == -1:
-                print 'Could not find HTTP body'
-                return
-            lines = ascii_dump[body_start:].split('\n')
-            #treat the first line specially
-            binary_html += bytearray.fromhex(lines[0][:-17])
-            for line in lines[1:]:
-                #convert ascii representation of hex into binary
-                #only deal with lines where first 4 chars are hexdigits
-                if all(c in hexdigits for c in line [:4]):
-                    m_array = bytearray.fromhex(line[6:54])
-                    binary_html += m_array
-                else:
-                    break
-                    
-    if decrypted_pos == -1 and not already_found:
-        #
-        #
-        #TODO Fix a corner case where strings being searched are spanned over two lines
-        #
-        #
-        
-        #example.org's response going through squid ends up as ungzipped, unchunked HTML
-        page_end = ascii_dump.rfind('.\n\n')
-        if page_end == -1:
-            print "Could not find page's end"
-            return None
-        
-        page_start = ascii_dump.rfind('0d 0a 0d 0a')
-        #skip the HTTP header and find where the HTTP body starts
-        #The delimiter of header from body '0d 0a 0d 0a' can be spanned over two lines
-        #Hence the workaround
-        
-        lines = ascii_dump.split('\n')
-        hexlist = [line.split()[1:17] for line in lines]
-        #flatten the nested lists acc.to http://stackoverflow.com/questions/952914/making-a-flat-list-out-of-list-of-lists-in-python
-        flathexlist = [item for sublist in hexlist for item in sublist]
-        #convert the list into a single string
-        hexstring = ''.join(flathexlist)
-        delimiter_pos = hexstring.rfind('0d0a0d0a')
-        if delimiter_pos == -1:
-            print "Could not find page's start"
-            return None
-        start_pos_in_hex = delimiter_pos +len('0d0a0d0a')
-        #Knowing that there are 16 2-char hex numbers in a single line, calculate absolute position
-        start_line_in_ascii = start_pos_in_hex/32
-        line_offset_in_ascii = (start_pos_in_hex % 32)/2
-        #an ascii line is 73 chars long, each hex number takes up 2 alphanum chars + 1 space char
-        #There are 6 line number chars (including spaces) at the start of each line
-        page_start = start_line_in_ascii*73+6+line_offset_in_ascii*3
-              
-        if page_end < page_start:
-            print "Could not find HTML page"
-            return None
-        lines = ascii_dump[page_start:page_end+len('.\n\n')].split('\n')
-        #treat the first line specially
-        binary_html += bytearray.fromhex(lines[0][0:48])
-        for line in lines[1:]:
+        return binary_html
+    
+    #else
+    dechunked_pos = ascii_dump.rfind('De-chunked entity body')
+    if dechunked_pos != -1:
+        for line in ascii_dump[dechunked_pos:].split('\n')[1:]:
             #convert ascii representation of hex into binary
             #only deal with lines where first 4 chars are hexdigits
             if all(c in hexdigits for c in line [:4]):
@@ -558,18 +421,39 @@ def get_html_hash_from_ascii_dump(ascii_dump):
                 binary_html += m_array
             else:
                 break
-    
-    if len(binary_html) == 0:
-        print 'empty binary array'
-        return None
-    #FF's view source (against which we are comparing) makes certain changes
-    # to the original HTML. It replaces
-    # '\r\n' with '\n'
-    #and '\r' with '\n'
-    binary_html2 = binary_html.replace('\r\n','\n')
-    binary_html3 = binary_html2.replace('\r','\n')
-    #modified 2 Oct; return html as well as hash, currently used in this module
-    return [binary_html3,hashlib.md5(binary_html3).hexdigest()]
+        return binary_html
+            
+    #else
+    reassembled_pos = ascii_dump.rfind('Reassembled SSL')
+    if reassembled_pos != -1:
+        for line in ascii_dump[reassembled_pos:].split('\n')[1:]:
+            #convert ascii representation of hex into binary
+            #only deal with lines where first 4 chars are hexdigits
+            if all(c in hexdigits for c in line [:4]):
+                m_array = bytearray.fromhex(line[6:54])
+                binary_html += m_array
+            else:
+                #http HEADER is delimited from HTTP body with '\r\n\r\n'
+                if binary_html.find('\r\n\r\n') == -1:
+                    return -1
+                break
+        return binary_html.split('\r\n\r\n', 1)[1]
+
+    #else
+    decrypted_pos = ascii_dump.rfind('Decrypted SSL data')
+    if decrypted_pos != -1:
+        for line in ascii_dump[decrypted_pos:].split('\n')[1:]:
+            #convert ascii representation of hex into binary
+            #only deal with lines where first 4 chars are hexdigits
+            if all(c in hexdigits for c in line [:4]):
+                m_array = bytearray.fromhex(line[6:54])
+                binary_html += m_array
+            else:
+                #http HEADER is delimited from HTTP body with '\r\n\r\n'
+                if binary_html.find('\r\n\r\n') == -1:
+                    return -1
+                break
+        return binary_html.split('\r\n\r\n', 1)[1]
 
 #30 Sep 2013:This is a based mainly on dansmith's get_html_from_ascii_dump. 
 #Here, given a particular capfile, we want to find the frame numbers
@@ -669,11 +553,11 @@ def get_all_html_from_key_file(capfile,keyfile):
     for x in ascii_split:
         if not x:
             continue
-        html_and_hash = get_html_hash_from_ascii_dump(x)
-        if not html_and_hash:
+        html = get_html_from_ascii_dump(x)
+        if not html:
             continue
-        html,hash = html_and_hash
-        kfhtml.append(html.decode('utf-8'))
+        #kfhtml.append(html.decode('utf-8'))
+        kfhtml.append(html)
     #print "for keyfile:",keyfile,"got html:",html
     return kfhtml
 

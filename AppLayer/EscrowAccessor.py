@@ -328,34 +328,7 @@ if role=='buyer' else \
         return Msg.sendMessages(messages,recipientID=recipientID)
         
     
-    #this method collects all messages addressed to the user specified
-    #by recipientID (which should be the useragent id who owns this accessor)
-    def collectMessages(self):
-        msgs = Msg.collectMessages(self.agent.uniqID())
-        if not msgs: 
-            return None
-        else:
-            return msgs
-        
-    def waitForMessages(self,timeout):
-        for x in range(1,timeout):
-            if (self.collectMessages()):
-                return True
-            time.sleep(1)
-        shared.debug(1,["Waiting for messages timed out"])
-        return False
-    
     def getSingleMessage(self,timeout=1):
         return Msg.getSingleMessage(self.agent.uniqID(),timeout)
-        self.sendMessages(messages={'0.'+self.agent.uniqID():\
-                                    'CLIENT_ALIVE_REQUEST:'},recipientID=counterparty)
-        msg = self.getSingleMessage(timeout=30)
-        if not msg:
-            return False
-        if not 'CLIENT_ALIVE_RESPONSE' in msg.values()[0]:
-            return False
-        return True
-    
-    #def respondToAliveRequest(self, counterparty):
         
 #============END MESSAGING FUNCTIONS===============================

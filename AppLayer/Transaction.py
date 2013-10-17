@@ -39,7 +39,8 @@ class Transaction():
         #set by buyer only at end of banking session
         self.keyFile=''
         
-        #hashes used for dispute TODO: probably not practical, should be a pointer not an actual data set
+        #hashes used for dispute TODO: probably not practical, 
+        #should be a pointer not an actual data set
         self.buyerHashes = []
         self.magicHashes = []
         self.sellerHashes=[]

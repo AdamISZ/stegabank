@@ -23,13 +23,13 @@ class Agent(object):
         self.OS = shared.OS
         #persistent store of incomplete transactions connected to this agent;
         #initially empty
-        txfile = os.path.join(self.baseDir,'transactions.p')
-        if os.path.exists(txfile):
-            with open(txfile) as txf:
+        self.txFile = os.path.join(self.baseDir,'transactions'+self.BTCAddress+'.p')
+        if os.path.exists(self.txFile):
+            with open(self.txFile) as txf:
                 self.transactions = pickle.load(txf)
         else:
             self.transactions=[]
-        #self.printCurrentTransactions()
+
     
     #To ensure correct persistence, transaction states can only be updated
     #via this method.
@@ -37,7 +37,6 @@ class Agent(object):
     #Otherwise, the transaction can be set either with a tx object
     #or an ID. The new state should be defined (see Transaction.Transaction)
     #if it's not, the transaction will be deleted from the store
-    #TODO a bit more error handling - cannot hand a txID with a new tx!
     def transactionUpdate(self, full=False, txID='',tx=None,new_state=''):
         #a little error checking:
         if new_state:
@@ -78,7 +77,7 @@ class Agent(object):
         #be acceptable except for the fact that performance is not an issue.
         #TODO need to review whether system crash makes this unacceptable;
         #transfer to simple mysql database or something like that 
-        with open(os.path.join(self.baseDir,'transactions.p'),'w') as f:
+        with open(self.txFile,'w') as f:
             pickle.dump(self.transactions,f)
             shared.debug(0,["Dumped contents of transaction to file"])
             

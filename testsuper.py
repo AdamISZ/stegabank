@@ -66,7 +66,7 @@ if __name__ == "__main__":
             if 'END_PAGE' in msg.values()[0].split(':')[0]:
                 f.write('\r\n\r\n**END OF PAGE**\r\n\r\n')
             else:
-                f.write(':'.join(html.split(':')[1:]).encode('utf-8'))
+                f.write(':'.join(html.split(':')[1:]))
     time.sleep(2)
     f.close
             

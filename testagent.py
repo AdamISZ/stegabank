@@ -39,13 +39,12 @@ import Messaging
 
 def do_transaction(myself, role, escrow):
     
-    #the next stage - instantiate a transaction based on user input
-    #when bitcoin code is ready, it will slot in here somewhere
-    #use the command line to drive; ask the user what they want to do: buy/sell
-    #and how much
+    #Instantiate a transaction based on user input
     try:
-        role = shared.get_binary_user_input("Do you want to buy(B) or sell(S)?: ",'b','buyer','s','seller')
-        ctrprty = shared.get_validated_input("Enter the bitcoin address of your counterparty: ",str)
+        role = shared.get_binary_user_input("Do you want to buy(B) or sell(S)?: "\
+                                            ,'b','buyer','s','seller')
+        ctrprty = shared.get_validated_input("Enter the bitcoin address of "+\
+                                             "your counterparty: ",str)
         amount = shared.get_validated_input("Enter amount to trade: ",float)
         price = shared.get_validated_input("Enter worst acceptable price in "+\
                                         myself.baseCurrency+" per BTC: ",float)
@@ -67,22 +66,23 @@ def do_transaction(myself, role, escrow):
     #having collected enough info, we're ready to request a transaction:
     myself.activeEscrow.requestTransaction(buyer=buyer,seller=seller, \
                     amount=amount,price=price,curr=myself.baseCurrency)
-    #the next step (for both parties) is to wait for confirmation from the remote escrow
-    #that the transaction has been accepted as valid
+    #it is not NECESSARY for the counterparties to synchronize at this point;
+    #their request has been stored and the match of two requests can occur
+    #later. However, the intended approach is for buyer and seller to 
+    #do this part at the same time. So we wait for escrow response, understanding
+    #that the user may simply quit out at any time.
     if not myself.activeEscrow.getResponseToTxnRq(tx):
         shared.debug(0,["Attempt failed.Quitting."])
         exit(1)
     
     #at this stage the escrow and counterparty have confirmed that the
-    #transaction represented by 'tx' is valid.
-    
+    #transaction represented by 'tx' is valid. It has been updated by reference.
     shared.debug(1,["Transaction has been set to: ",tx.uniqID()])
     
     myself.doBankingSession(tx)
     
 
 def do_dispute(myself,role,escrow):
-    
     myself.printCurrentTransactions()
     tnum = shared.get_validated_input("Choose a transaction to dispute:",int)
     tx = myself.transactions[tnum]
@@ -92,21 +92,16 @@ def do_dispute(myself,role,escrow):
     #wait for escrow to ask for the data
     escrow.waitForSSLDataRequest(tx)
     
-    #send the ssl data - we use the 'on the fly' method of formatting the message
-    #noting that the escrow accessor can reset the message key correctly
-    #based on the transaction passed, and always sends to the escrow by default
     my_ssl_data = ','.join(myself.getHashList(tx))
     if role == 'buyer':
         #need to send the magic hashes telling the escrow which other hashes
         #to ignore in the comparison
         my_ssl_data += '^'+','.join(myself.getMagicHashList(tx))
-        
+    
+    #'x' is a dummy, we use default sending signature (TODO clean that up)    
     escrow.sendMessages(messages={'x':'SSL_DATA_SEND:'+my_ssl_data},\
                         transaction=tx,rs=703)
         
-    
-    
-
 def do_actions_menu(myself,role,escrow,actionables):
     while True:
         print "Current actions to be taken:"
@@ -139,6 +134,7 @@ if __name__ == "__main__":
         g(role.title(),"base_currency"))
     
     #instantiate a blocking connection to the message queue
+    #TODO ssl connections with credentials (or similar)
     try:
         Msg.instantiateConnection(un=g(role.title(),role+"_rabbitmq_user"),\
                               pw=g(role.title(),role+"_rabbitmq_pass"))
