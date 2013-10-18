@@ -2,15 +2,20 @@ from Crypto.PublicKey import RSA
 from Crypto.Util.number import getRandomRange, bytes_to_long, long_to_bytes
 from Crypto.Util.number import size, inverse, GCD
 from Crypto.Util.py3compat import *
+from Crypto.Hash import SHA
 import os
 import base64
 import struct
 import binascii
+from hashlib import sha1
+import hmac
+import sha
+
+#TODO: still in protean state...
 
 local_privkey_store_dir = "C:/ssllog-master/keys"
 
-#generates RSA keypair suitable for SSH, stores keypair in local keystore and
-#returns public key in format suitable for sending to escrow
+#generates RSA keypair suitable for SSH
 def generate_key_pair(hostname):
     
     #generation - takes a couple of seconds
@@ -33,9 +38,9 @@ def generate_key_pair(hostname):
 if __name__ == "__main__":
     
     keypair = generate_key_pair('blahug')
-    #print keypair.n
     
-    #public key output format is the 
+    #public key output format is the same as for OpenSSH. (So it can basically
+    #be copied direct to a host/server if needed).
     eb = long_to_bytes(keypair.e)
     nb = long_to_bytes(keypair.n)
     if bord(eb[0]) & 0x80: eb=bchr(0x00)+eb
@@ -62,16 +67,62 @@ if __name__ == "__main__":
     privkeystring = ''.join([ struct.pack(">I",len(pkp))+pkp for pkp in privkeyparts])
     priv_repr = binascii.b2a_base64(privkeystring)[:-1]
     
+    #if we were password protecting, we'd need a SHA for padding here, 
+    #but we're not
+    
+    
+    #see the PuTTy source comments below for details of how the HMAC is
+    #generated; it's quite complex. Note that this comment:
+    
+    #string  private-plaintext (the plaintext version of the
+    #                            private part, including the final
+    #                             padding)
+
+    #is inaccurate. It's actually the binary representation of the private
+    #key data (here called "privkeystring"), not the ascii base64 encoded
+    #version, and if encryption is used it's the ENCRYPTED version that's added
+    #here; but for us, there's no encryption, and there's no padding because 
+    # we don't password protect (otherwise it would be padded with however much
+    # is needed of the SHA of the ENCRYPTED private key data).
+    
+    #first construct the message to be HMAC-ed.
+    macdata = ''
+    for s in ['ssh-rsa','none','imported-openssh-key',keystring,privkeystring]:
+        macdata += (struct.pack(">I",len(s)) + s)
+    
+    
+    #construct a SHA1 hash of the given magic string; this will be used as
+    #key for hmac.
+    #no passphrase included here because no encryption used
+    HMAC_key = 'putty-private-key-file-mac-key'
+    HMAC_key2 = sha1(HMAC_key).digest()
+    HMAC2 = hmac.new(HMAC_key2,macdata,sha1)
+    
+    #TODO: not sure if should just remove line endings or what..
     with open('C:/ssllog-master/keys/stuff.ppk','w') as f:
+        f.write('PuTTY-User-Key-File-2: ssh-rsa\r\n')
+        f.write('Encryption: none\r\n')
+        f.write('Comment: imported-openssh-key\r\n')
+        
+        #public key section
+        f.write('Public-Lines: '+str(int((len(public_repr)+63)/64))+'\r\n')
         for i in range(0,len(public_repr),64):
             f.write(public_repr[i:i+64])
             f.write('\r\n')
-        f.write('\r\n')
+        
+        #private key section
+        f.write('Private-Lines: '+str(int((len(priv_repr)+63)/64))+'\r\n')
         for i in range(0,len(priv_repr),64):
             f.write(priv_repr[i:i+64])
             f.write('\r\n')
+            
+        #add private mac
+        f.write('Private-MAC: ')
+        f.write(HMAC2.hexdigest())
+        f.write('\r\n')
         
 #full format description from puttygen source, file sshpubk.c
+#(minor gotchas/inaccuracies noted above)
 '''    
 /* ----------------------------------------------------------------------
  * SSH-2 private key load/store functions.
