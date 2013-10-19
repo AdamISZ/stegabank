@@ -2,7 +2,7 @@
 #with an intelligible name in the local directory for keys,
 #and to return an OpenSSH formatted public key for transferring.
 #Using Python only, although bear in mind that the time taken for key 
-#generation can be appreciable (5-30 seconds?).
+#generation can be appreciable.
 #Private keys are stored in PuTTY format on Windows, and PEM format on Linux
 
 import os
@@ -13,7 +13,7 @@ from hashlib import sha1
 import hmac
 import rsa
 import platform
-
+import multiprocessing
 
 testing_conversion=False
 
@@ -42,10 +42,12 @@ def generate_keypair(txID,escrowID,oracleID,local_privkey_store_dir='.'):
     if not (txID and escrowID and oracleID):
         return False
     
-    #key generation can take 5-30+ seconds in pure Python
-    #poolsize refers to number of cores running in parallel
-    #todo: can this be optimised or just have to use one cpu?
-    pubkey,privkey = rsa.newkeys(2048,poolsize=2)
+    #key generation can take several seconds in pure Python
+    #see http://stuvel.eu/files/python-rsa-doc/usage.html#time-to-generate-a-key
+    #poolsize refers to number of cores running in parallel -
+    #seems reasonable to ask the multiprocessing how many cores are available.
+    #NB I haven't checked this in multiple environments..
+    pubkey,privkey = rsa.newkeys(2048,poolsize=multiprocessing.cpu_count())
     
     #construct the filename prefix we'll be writing to for both public
     #and private
