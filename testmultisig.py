@@ -1,18 +1,7 @@
 import random, os, json, sys
 from electrum import Network
 from pybitcointools import *
-
-#3 seeds:
-# notes: sending via electrum; not robust yet;
-# split into two scripts: one for address creation,
-# privs = [sha256(sys.argv[2]),sha256(sys.argv[3])
-#
-#resulted in: 
-#['1PbNRsThFA17uccSgzJM89LqRYqFrFHyfm', '1PbNRsThFA17uccSgzJM89LqRYqFrFHyfm', '12hpca4SrcCYMf5YRbnu8NSxYPAqxXnAnu']
-#['e47a3fdcf52371b73fe4cfe7fe2037d03e11be7e893a0d1d1b0b3b3ced66cba5', 'e47a3fdcf52371b73fe4cfe7fe2037d03e11be7e893a0d1d1b0b3b3ced66cba5', '7f496b4d374fe1c5773f37ccc36bec1a4df53ca8da55da39881136cc78f66f1f']
-#['04d9399e85461d925e4c3932cc033aee59873e1212216c81943d5634c2e45ee0f45181f69d63b236e53d286a43b2de2b0ee64850191771924430f92ac6542f3cf2', '04d9399e85461d925e4c3932cc033aee59873e1212216c81943d5634c2e45ee0f45181f69d63b236e53d286a43b2de2b0ee64850191771924430f92ac6542f3cf2', '046d38a48ed6f12b132cdf14e84d1d6678bbf0e148e1b4791ee39fa0945cecf86ecb870cd4c74a4e472b8e3034f771df0375a7c097adf2bc48ce9f2ea3e64e20dc']
-#35aHovjnZ9xdfYZsB2yBVTs6CWqnBpHNDY
-#524104d9399e85461d925e4c3932cc033aee59873e1212216c81943d5634c2e45ee0f45181f69d63b236e53d286a43b2de2b0ee64850191771924430f92ac6542f3cf24104d9399e85461d925e4c3932cc033aee59873e1212216c81943d5634c2e45ee0f45181f69d63b236e53d286a43b2de2b0ee64850191771924430f92ac6542f3cf241046d38a48ed6f12b132cdf14e84d1d6678bbf0e148e1b4791ee39fa0945cecf86ecb870cd4c74a4e472b8e3034f771df0375a7c097adf2bc48ce9f2ea3e64e20dc53ae
+import txpusher
 
 #elementary implementation:
 #stage 1: create three temp addresses
@@ -62,7 +51,10 @@ elif (sys.argv[1]=='r'):
     #pushtx(tx4)
 
     #send to electrum server
+    txpusher.send_tx(finaltx)
+    '''
     n = Network()
     n.start(wait=True)
     n.interface.send([('blockchain.transaction.broadcast', [str(finaltx)])], None)
-    print  finaltx.hash()
+    '''
+    print  Transaction(finaltx).hash()
