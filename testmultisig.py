@@ -2,6 +2,125 @@ import random, os, json, sys, ast, time
 from pybitcointools import *
 import txpusher
 
+#this should be defined in a config - MultsigStorageDirectory
+msd = '/root/pybitcointools/multisig_store'
+escrow_pubkey='04796ea7f5ca5afa6f3ba907a51484b8d5959a69f38551444538e72280f8dcb1760c0b69ed714fb835ca4bc89fe04132d175dace5004d679c6a85b69078b798495'
+
+
+def set_escrow_pubkey(pubkey):
+    global escrow_pubkey
+    escrow_pubkey = pubkey
+    
+#txid is the unique transaction identifier allowing the user to correlate
+#his keys with the transaction
+def create_tmp_address_and_store_keypair(txid):
+    #no brainwalleting; not safe (but RNG should be considered)
+    priv = sha256(str(random.randrange(2**256)))
+    pub = privtopub(priv)
+    addr = pubtoaddr(pub)
+    #write data to file
+    with open(os.path.join(msd,txid+'.private'),'wb') as f:
+        f.write('DO NOT LOSE, ALTER OR SHARE THIS FILE - WITHOUT THIS FILE, YOUR MONEY IS AT RISK. BACK UP! YOU HAVE BEEN WARNED!\r\n')
+        f.write(addr+'\r\n')
+        f.write(pub+'\r\n')
+        f.write(priv+'\r\n')
+        
+    #access to data at runtime for convenience
+    return (addr,pub,priv)
+
+#called by buyer AND seller
+def create_file_for_sending_to_counterparty_to_prepare_multisig(txid):
+    #to pass the public key to the counterparty allowing for multisig address
+    #and script creation
+        
+    #to avoid a terrible error, include the escrow pubkey in the message
+    #for verification:
+    global escrow_pubkey
+    check_escrow_present()
+    
+    #read the pub key from the .private file
+    with open(os.path.join(msd,txid+'.private'),'r') as f:
+        f.readline()
+        f.readline()
+        pub = f.readline() #TODO : error checking is critical here
+    with open(os.path.join(msd,txid+'.share'),'wb') as f:
+        f.write("THIS FILE IS SAFE TO SHARE WITH OTHERS. SEND IT TO YOUR COUNTERPARTY TO ALLOW THEM TO DO ESCROW WITH YOU.\r\n")
+        f.write(escrow_pubkey+'\r\n')
+        f.write(pub+'\r\n')
+        
+    return True
+
+#when user has received pubkey from counterparty, can set up the multisig address
+#payment INTO the multisig address, by seller, happens outside the application
+def create_multisig_address(pubfile1,pubfile2):
+    global escrow_pubkey
+    check_escrow_present()
+    pubs = [escrow_pubkey]
+    for f in [pubfile1,pubfile2]:
+        with open(f,'r') as fi:
+            fi.readline()
+            fi.readline()
+            pubs.append(fi.readline().strip())
+    mscript = mk_multisig_script(pubs,2,3)
+    msigaddr = scriptaddr(mscript.decode('hex'))
+    return (msigaddr,mscript)
+
+#can be used by a counterparty to check whether money has been paid in
+def check_balance_at_multisig(pubfile1,pubfile2):
+    msigaddr, mscript = create_multisig_address(pubfile1,pubfile2)
+    confirmed, unconfirmed = get_balance_lspnr(msigaddr)
+    return "Balance at",msigaddr,"is: confirmed:",confirmed,"unconfirmed:", unconfirmed
+
+#called by both counterparties (and can be escrow) to generate a signature to apply
+def create_sig_for_redemption(txid,pubfile1,pubfile2,amt,txfee,addr_to_be_paid,privfile=None):
+    msigaddr,mscript = create_multisig_address(pubfile1,pubfile2)
+    amt = int(amt*1e8)
+    txfee = int(txfee*1e8)
+    outs = [{'value':amt-txfee,'address':addr_to_be_paid}]
+    ins = history(msigaddr)[0]
+    tmptx = mktx(history(msigaddr),outs)
+    if not privfile:
+        privfile = os.path.join(msd,txid+'.private')
+    with open(privfile,'r') as f:
+        f.readline() #todo - how to do 3 at once?
+        f.readline()
+        f.readline()
+        priv = f.readline().strip()
+    sig =  multisign(tmptx.decode('hex'),0,mscript.decode('hex'),priv)
+    #now store the signature in a file
+    with open(os.path.join(msd,txid+'.sig'),'wb') as f:
+        f.write(sig+'\r\n')
+    #for convenience
+    return sig
+
+#any party in possession of two signatures can call this to broadcast
+#the tx to the network
+def sign_and_broadcast_to_network(txid,sigfile1,sigfile2,pubfile1,pubfile2,amt,txfee,addr_to_be_paid):
+    sigs=[]
+    for f in [sigfile1,sigfile2]:
+        with open(f,'r') as fi:
+            sigs.append(fi.readline().strip())
+        
+    with open(os.path.join(msd,txid+'.private'),'r') as f:
+        for i in range(1,4): f.readline()
+        priv = f.readline()
+    msigaddr, mscript = create_multisig_address(pubfile1,pubfile2)
+    amt = int(amt*1e8)
+    txfee = int(txfee*1e8)
+    outs = [{'value':amt-txfee,'address':addr_to_be_paid}]
+    ins = history(msigaddr)[0]
+    tmptx = mktx(history(msigaddr),outs)
+    finaltx = apply_multisignatures(tmptx,0,mscript,sigs)
+    txpusher.send_tx(finaltx)
+    return tx_hash(finaltx).encode('hex')
+
+
+def check_escrow_present():
+    global escrow_pubkey
+    if not escrow_pubkey:
+        raise Exception("The escrow's pubkey should be set before depositing escrowed bitcoins!")
+        
+#----------LEGACY, LEFT FOR NOW--------------------------
 def create_1_address():
     #no brainwalleting; not safe (but RNG should be considered)
     priv = sha256(str(random.randrange(2**256)))
@@ -9,41 +128,11 @@ def create_1_address():
     addr = pubtoaddr(pub)
     return priv,pub,addr
 
-#input must be a list of 3 public keys, format: TODO
+#input must be a list of 3 public keys, in hex format
 def create_3_address(pubs):
     mscript = mk_multisig_script(pubs,2,3)
     msigaddr = scriptaddr(mscript.decode('hex'))
     return (msigaddr,mscript)
-
-#This can be used to pay into the multisig address from a temporary
-#address. The restriction is that this transaction will spend the ENTIRE
-#value of that most recent unspent output at the address.
-#argument 'amt' should be amount to pay PLUS txfee (just a safeguard; if
-#amount+txfee does not equal existing balance, will return false.)
-#amt and txfee in bitcoins, conversion to satoshis done internally
-#return value is the hash of the sent transaction.
-def pay_into_address(outaddr,inaddr,amt,txfee):
-    amt = int(amt*1e8)
-    txfee = int(txfee*1e8)
-    #only 1 output, no change - keeping it as simple as poss
-    outs = [{'value':amt-txfee,'address':outaddr}] 
-    
-    ins = history(inaddr)[0]
-    
-    #sanity check: the address being used here should have been 
-    #(a) freshly generated and (b) funded with the appropriate amount
-    if int(ins['amount']) != amt+txfee:
-        print "address:",addr,"is not correctly funded; adjust amount to:",str(int((amt+txfee)/1e8)),"in bitcoins."
-        print "Please note that you should be using a TEMPORARY address to pay in, generated by the app."
-        print "Do NOT attempt to use one of your normal wallet addresses for this payment!"
-        return False
-    if ins['spend']:
-        print "the funds at the address:",addr,"have already been spent, please generate another address and fund that."
-        return False
-    
-    finaltx = mktx(ins,outs)
-    txpusher.send_tx(finaltx)
-    return tx_hash(temptx)
 
 def create_escrow_tx(msigaddr,amt,txfee,addr_to_be_paid):
     amt = int(amt*1e8)
@@ -55,14 +144,17 @@ def create_escrow_tx(msigaddr,amt,txfee,addr_to_be_paid):
     
 #give all public keys and 1 private key: returns the tx with signature applied
 def sign_escrow_tx(tx,mscript,priv):
-    sig = multisign(temptx.decode('hex'),0,mscript.decode('hex'),priv)
-    return apply_multisignatures(tx.decode('hex'),0,mscript.decode('hex'),[sig])
+    return multisign(tx.decode('hex'),0,mscript.decode('hex'),priv)
+    #return apply_multisignatures(tx.decode('hex'),0,mscript.decode('hex'),[sig])
     
 #take partially signed tx and apply second key, then send out tx on network
-def finalize_and_send_escrow_payment(tx,mscript,priv):
-    finaltx = sign_escrow_tx(tx,mscript,priv)
+def finalize_and_send_escrow_payment(tx,sig,mscript,priv):
+    sig2 = sign_escrow_tx(tx,mscript,priv)
+    finaltx = apply_multisignatures(tx,0,mscript,[sig,sig2])
+    #print finaltx
+    print deserialize(finaltx)
     txpusher.send_tx(finaltx)
-    return tx_hash(finaltx)
+    return tx_hash(finaltx).encode('hex')
                                                 
 #will accurately report the current confirmed and unconfirmed balance
 #in the given address, and return (confirmed, unconfirmed).
@@ -82,12 +174,13 @@ def get_balance_lspnr(addr_to_test):
     #query electrum for a list of txs at this address
     txdetails = txpusher.get_from_electrum([addr_to_test],t='a')
     x = txdetails[0]
-
+    print x
     #need to build a list of requests to send on to electrum, asking it for
     #the raw transaction data
     args=[]
     unconfirmedtxhash = None
-
+    if not x['result']:
+        return (0.0,0.0)
     for txdict in x['result']:
         if txdict["height"]==0:
             #unconfirmeds show up as block height 0
@@ -210,101 +303,91 @@ def get_balance_lspnr(addr_to_test):
 
 if __name__ == "__main__":
     
-    #Test 1: check the balance of some address out there
-    c,u = get_balance_lspnr(sys.argv[1])
-    print "Confirmed balance for",sys.argv[1],":",str(c)
-    print "Unconfirmed balance for ",sys.argv[1],":",str(u)
+    '''addr, pub, priv = create_tmp_address_and_store_keypair('123')
+    print addr, pub, priv
+    '''
     
-    #Test 2: make some addresses and a multisig
-    privs=[]
-    pubs=[]
-    addresses=[]
-    for i in range(1,3):
-        priv,pub,addr = create_1_address()
-        print "Random address created: ", addr
-        privs.append(priv)
-        pubs.append(pub)
-        addresses.append(addr)
-    msigaddr, mscript = create_3_addr(pubs)
-    print "Created multisig addr:", msigaddr
+    '''
+    create_file_for_sending_to_counterparty_to_prepare_multisig('123')
+    '''
     
-    if (sys.argv[2]=='c'):
-        #Test 3: pay into the multisig; because this needs an address
-        #with a non-zero account, for convenience we'll use the same
-        #address as we checked the balance on earlier
-        txhash = pay_into_addr(msigaddr,sys.argv[1],0.001,0.0002)
-        print "Payment into multisig sent; amount paid was .8 mbtc, transaction hash is:",txhash
-        print "Wait for confirms on the network before continuing. (About 10 min)"
-        exit(0)
+    '''print create_multisig_address('/root/pybitcointools/multisig_store/123.share',\
+                                  '/root/pybitcointools/multisig_store/my123.share')
+    print check_balance_at_multisig('/root/pybitcointools/multisig_store/123.share',\
+                                  '/root/pybitcointools/multisig_store/my123.share')
+    '''
     
+    '''
+    create_sig_for_redemption('123','/root/pybitcointools/multisig_store/123.share',\
+                                  '/root/pybitcointools/multisig_store/my123.share',\
+                                    .001,0.0002,'1iHCdVZrW8yLKunsg7y2kssN1dCqM4m52')
+    '''
+    
+    '''
+    create_sig_for_redemption('123','/root/pybitcointools/multisig_store/123.share',\
+                                  '/root/pybitcointools/multisig_store/my123.share',\
+                                    .001,0.0002,'1iHCdVZrW8yLKunsg7y2kssN1dCqM4m52',\
+                                    '/root/pybitcointools/multisig_store/my123.private')
+    '''
+    
+    print sign_and_broadcast_to_network('123',\
+        '/root/pybitcointools/multisig_store/my123.sig',\
+        '/root/pybitcointools/multisig_store/123.sig',\
+        '/root/pybitcointools/multisig_store/123.share',\
+        '/root/pybitcointools/multisig_store/my123.share',\
+        0.001,0.0002,'1iHCdVZrW8yLKunsg7y2kssN1dCqM4m52')
+    
+    '''if sys.argv[1] != 'c':
+        #Test 1: check the balance of some address out there
+        c,u = get_balance_lspnr(sys.argv[1])
+        print "Confirmed balance for",sys.argv[1],":",str(c)
+        print "Unconfirmed balance for ",sys.argv[1],":",str(u)
+        
+        #Test 2: make some addresses and a multisig
+        privs=[]
+        pubs=[]
+        addresses=[]
+        for i in range(1,4):
+            priv,pub,addr = create_1_address()
+            print "Random address created: ", addr
+            privs.append(priv)
+            pubs.append(pub)
+            addresses.append(addr)
+        msigaddr, mscript = create_3_address(pubs)
+        print "Created multisig addr:", msigaddr
+        print "private keys:",privs
+        print "public keys:",pubs
+        print "store the public and private keys, spend money into the msigaddr, then run the script again with args: c,pub1,pub2,pub3,priv1/2/3,priv1/2/3 to create the redeem and unlock the redeem and send onto network."
+        
     else:
+        #in this case the args look like: 'c',addrtospendto,pubkey1,pubkey2,pubkey3,privkey[1-3],privkey[1-3]
         #Test 4: create the escrow transaction
-        escrowtx = create_escrow_tx(msigaddr,0.0008, 0.0002,,addresses[1])
+        msigaddr, mscript = create_3_address(sys.argv[3:6])
+        print "generated multisig address:",msigaddr,"is this ok?"
+        r = raw_input("Is this OK? y/n")
+        if r != 'y':
+            exit(0)
+        escrowtx = create_escrow_tx(msigaddr,0.0008, 0.0002,sys.argv[2])
         print "Escrow transaction created:", deserialize(escrowtx)
-        
-        #Test 5: partially sign the escrow transaction
-        escrowtx2 = sign_escrow_tx(escrowtx,mscript,privs[0])
-        print "Escrow transaction partially signed:",deserialize(escrowtx2)
-        
+        time.sleep(5)
+        #Test 5: partially sign the escrow transaction, generate a signature
+        sig = sign_escrow_tx(escrowtx,mscript,sys.argv[6])
+        print "First signature applied"
+        time.sleep(5)
         #Test 6: finalize and send
-        txhash = finalize_and_send_escrow_payment(escrowtx2,mscript,privs[1])
+        txhash = finalize_and_send_escrow_payment(escrowtx,sig,mscript,sys.argv[7])
         print "Finished escrow unlock, transaction hash is:",txhash
         
         #Test 7: check it's been paid
-        time.sleep(10)
+        time.sleep(20)
         #should be visible by now:
-        c,u = get_balance_lspnr(addresses[1])
+        c,u = get_balance_lspnr(sys.argv[2])
         print "Confirmed balance at",addresses[1],"is now:",str(c)
         print "Unconfirmed balance at",addresses[1],"is now:",str(u)
-    
+    '''
     
     
 
  
-#===LEGACY, for reference==============
-'''
-if (sys.argv[1]=='c'):
-    privs = [sha256(sys.argv[2]),sha256(sys.argv[3]),sha256(sys.argv[4])]
-    print "Here are the private keys: ",privs
-    #in future version, 2 of these 3 pubs will be IMPORTED for addr creation
-    pubs = [privtopub(priv) for priv in privs]
-    print "Here are the public keys: ", pubs
-    addresses = [pubtoaddr(pub) for pub in pubs]
-    print "Here are the addresses generated: ",addresses
-
-    #we make a multisig address
-    mscript = mk_multisig_script(pubs,2,3)
-    msigaddr = scriptaddr(mscript.decode('hex'))
-    print "Multisig address created: " , msigaddr
-    print "Script created: ", mscript
-
-elif (sys.argv[1]=='r'):
-    msigaddr = sys.argv[2]
-    addr_to_pay = sys.argv[3]
-    tx_fee = sys.argv[4] #could conceivably give change but that is not the use case of multisig
-    mscript = sys.argv[5]
-    priv1 = sys.argv[6]
-    priv2=sys.argv[7]
-    #TODO: code will ACCEPT a raw, partially signed tx and then sign it with ONE key
-    #in first version of test, all keys are here
-    #first CREATE a transaction FROM the multisig to the to-pay
-    #address, then SIGN that transaction with 2 of the 3 keys. Then push.
-    outs = [{'value':100000-int(tx_fee),'address':addr_to_pay}]
-    print history(msigaddr)
-    temptx = mktx(history(msigaddr),outs)
-    #print tx3
-    #print deserialize(tx3)
-    sig1 = multisign(temptx.decode('hex'),0,mscript.decode('hex'),priv1)
-    sig2 = multisign(temptx.decode('hex'),0,mscript.decode('hex'),priv2)
-    finaltx = apply_multisignatures(temptx,0,mscript,[sig1,sig2])
-    #as of 25 October: blockchain.info is not accepting multisig redeems
-    #so we cannot call this superior method; instead we must use electrum
-    #pushtx(tx4)
-
-    #send to electrum server
-    txpusher.send_tx(finaltx)
-    
-    print  Transaction(finaltx).hash()
-    '''
 
 
