@@ -4,6 +4,8 @@ import txpusher
 
 #this should be defined in a config - MultsigStorageDirectory
 msd = '/root/pybitcointools/multisig_store'
+
+#This should be set in set_escrow_pubkey before doing anything
 escrow_pubkey='04796ea7f5ca5afa6f3ba907a51484b8d5959a69f38551444538e72280f8dcb1760c0b69ed714fb835ca4bc89fe04132d175dace5004d679c6a85b69078b798495'
 
 
@@ -120,41 +122,7 @@ def check_escrow_present():
     if not escrow_pubkey:
         raise Exception("The escrow's pubkey should be set before depositing escrowed bitcoins!")
         
-#----------LEGACY, LEFT FOR NOW--------------------------
-def create_1_address():
-    #no brainwalleting; not safe (but RNG should be considered)
-    priv = sha256(str(random.randrange(2**256)))
-    pub = privtopub(priv)
-    addr = pubtoaddr(pub)
-    return priv,pub,addr
 
-#input must be a list of 3 public keys, in hex format
-def create_3_address(pubs):
-    mscript = mk_multisig_script(pubs,2,3)
-    msigaddr = scriptaddr(mscript.decode('hex'))
-    return (msigaddr,mscript)
-
-def create_escrow_tx(msigaddr,amt,txfee,addr_to_be_paid):
-    amt = int(amt*1e8)
-    txfee = int(txfee*1e8)
-    outs = [{'value':amt-txfee,'address':addr_to_be_paid}]
-     
-    ins = history(msigaddr)[0]
-    return mktx(history(msigaddr),outs)
-    
-#give all public keys and 1 private key: returns the tx with signature applied
-def sign_escrow_tx(tx,mscript,priv):
-    return multisign(tx.decode('hex'),0,mscript.decode('hex'),priv)
-    #return apply_multisignatures(tx.decode('hex'),0,mscript.decode('hex'),[sig])
-    
-#take partially signed tx and apply second key, then send out tx on network
-def finalize_and_send_escrow_payment(tx,sig,mscript,priv):
-    sig2 = sign_escrow_tx(tx,mscript,priv)
-    finaltx = apply_multisignatures(tx,0,mscript,[sig,sig2])
-    #print finaltx
-    print deserialize(finaltx)
-    txpusher.send_tx(finaltx)
-    return tx_hash(finaltx).encode('hex')
                                                 
 #will accurately report the current confirmed and unconfirmed balance
 #in the given address, and return (confirmed, unconfirmed).
@@ -303,26 +271,37 @@ def get_balance_lspnr(addr_to_test):
 
 if __name__ == "__main__":
     
+    #Test 1: make and store a local "ephemeral" address and keypair
+    #for signing a multisig
     '''addr, pub, priv = create_tmp_address_and_store_keypair('123')
     print addr, pub, priv
     '''
     
+    #Test 2: make share-able file to give to counterparty to set up
+    #the multisig
     '''
     create_file_for_sending_to_counterparty_to_prepare_multisig('123')
     '''
     
+    #Test 3: generate the multisig; after this, pay into the address (seller)
     '''print create_multisig_address('/root/pybitcointools/multisig_store/123.share',\
                                   '/root/pybitcointools/multisig_store/my123.share')
+    '''
+    
+    #Test 4: check whether it's been paid into the multisig address
+    '''
     print check_balance_at_multisig('/root/pybitcointools/multisig_store/123.share',\
                                   '/root/pybitcointools/multisig_store/my123.share')
     '''
     
+    #Test 5: sign the transaction and store it in a file to send on 
     '''
     create_sig_for_redemption('123','/root/pybitcointools/multisig_store/123.share',\
                                   '/root/pybitcointools/multisig_store/my123.share',\
                                     .001,0.0002,'1iHCdVZrW8yLKunsg7y2kssN1dCqM4m52')
     '''
     
+    #Test 6: other party also signs
     '''
     create_sig_for_redemption('123','/root/pybitcointools/multisig_store/123.share',\
                                   '/root/pybitcointools/multisig_store/my123.share',\
@@ -330,64 +309,14 @@ if __name__ == "__main__":
                                     '/root/pybitcointools/multisig_store/my123.private')
     '''
     
+    #Test 7: broadcast the transaction
+    '''
     print sign_and_broadcast_to_network('123',\
         '/root/pybitcointools/multisig_store/my123.sig',\
         '/root/pybitcointools/multisig_store/123.sig',\
         '/root/pybitcointools/multisig_store/123.share',\
         '/root/pybitcointools/multisig_store/my123.share',\
         0.001,0.0002,'1iHCdVZrW8yLKunsg7y2kssN1dCqM4m52')
-    
-    '''if sys.argv[1] != 'c':
-        #Test 1: check the balance of some address out there
-        c,u = get_balance_lspnr(sys.argv[1])
-        print "Confirmed balance for",sys.argv[1],":",str(c)
-        print "Unconfirmed balance for ",sys.argv[1],":",str(u)
-        
-        #Test 2: make some addresses and a multisig
-        privs=[]
-        pubs=[]
-        addresses=[]
-        for i in range(1,4):
-            priv,pub,addr = create_1_address()
-            print "Random address created: ", addr
-            privs.append(priv)
-            pubs.append(pub)
-            addresses.append(addr)
-        msigaddr, mscript = create_3_address(pubs)
-        print "Created multisig addr:", msigaddr
-        print "private keys:",privs
-        print "public keys:",pubs
-        print "store the public and private keys, spend money into the msigaddr, then run the script again with args: c,pub1,pub2,pub3,priv1/2/3,priv1/2/3 to create the redeem and unlock the redeem and send onto network."
-        
-    else:
-        #in this case the args look like: 'c',addrtospendto,pubkey1,pubkey2,pubkey3,privkey[1-3],privkey[1-3]
-        #Test 4: create the escrow transaction
-        msigaddr, mscript = create_3_address(sys.argv[3:6])
-        print "generated multisig address:",msigaddr,"is this ok?"
-        r = raw_input("Is this OK? y/n")
-        if r != 'y':
-            exit(0)
-        escrowtx = create_escrow_tx(msigaddr,0.0008, 0.0002,sys.argv[2])
-        print "Escrow transaction created:", deserialize(escrowtx)
-        time.sleep(5)
-        #Test 5: partially sign the escrow transaction, generate a signature
-        sig = sign_escrow_tx(escrowtx,mscript,sys.argv[6])
-        print "First signature applied"
-        time.sleep(5)
-        #Test 6: finalize and send
-        txhash = finalize_and_send_escrow_payment(escrowtx,sig,mscript,sys.argv[7])
-        print "Finished escrow unlock, transaction hash is:",txhash
-        
-        #Test 7: check it's been paid
-        time.sleep(20)
-        #should be visible by now:
-        c,u = get_balance_lspnr(sys.argv[2])
-        print "Confirmed balance at",addresses[1],"is now:",str(c)
-        print "Unconfirmed balance at",addresses[1],"is now:",str(u)
     '''
     
     
-
- 
-
-
