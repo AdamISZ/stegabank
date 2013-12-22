@@ -1,0 +1,94 @@
+#boilerplate contract
+
+#self.text={'Buyer BTC Address':buyerBtc,
+#'Seller BTC Address':sellerBtc,
+#'Fiat Currency ISO':fiatCcyIso,
+#'Fiat Currency Amount':fiatCcyAmt,
+#'BTC Amount':btcAmt,
+#'Buyer Bank Details':buyerBankDetails,
+#'Seller Bank Details':sellerBankDetails,
+#'Seller Deposit Fee':sellerDepositFee,
+#'Buyer Deposit Fee':buyerDepositFee,
+#'Seller Escrow Fee':sellerEscrowFee,
+#'Buyer Escrow Fee':buyerEscrowFee,
+#'Bank Wire Sending Deadline':paymentSendingDeadline,
+#'Seller Proxy Service Agreement':sellerProxyServiceAgreement}
+
+CONTRACT
+==========
+This is a contract between:
+Buyer BTC Address: 
+
+acting as buyer of bitcoins, and 
+Seller BTC Address:
+acting as seller of bitcoins.
+
+The currency to be transferred from the buyer to the seller, identified by its ISO code, is:
+Fiat Currency ISO: USD
+
+The amount of said currency to be transferred electronically from the buyer to the seller is:
+Fiat Currency Amount: 500.00
+Please note: this is the amount that must be received by the seller AFTER any fees imposed by banks.
+Buyers should therefore choose the option to pay all fees themselves in their internet banking interface.
+
+The amount of mBTC (thousandths of a bitcoin) to be transferred from the seller to the buyer is:
+mBTC Amount: 863.21
+This amount is to be placed into escrow with the escrow agent chosen randomly by the software,
+after this contract has been signed by both parties.
+
+
+The SHA256-hashed bank account name and number of the buyer is:
+Buyer Bank Details Hash: 123abcdef 
+The buyer promises to reveal to the escrow the information that generated
+this hash in case of a dispute. In case the buyer cannot provide
+bank details which match this hash, he/she forfeits the entire bitcoin amount of the transaction.
+
+The SHA256-hashed bank account name and number of the seller is:
+Seller Bank Details Hash: 321fedcab
+The seller promises to reveal to the escrow the information that generated
+this hash in case of a dispute. In case the seller cannot provide
+bank details which match this hash, he/she forfeits the entire bitcoin amount of the transaction.
+
+Seller Deposit Fee: 43mBTC
+Once the contract has been signed by both buyer and seller, the seller has committed to making
+best efforts to complete the transaction. If he/she subsequently aborts the transaction, this
+amount will be transferred to the buyer.
+
+Buyer Deposit Fee: 43mBTC
+Once the contract has been signed by both buyer and seller, the buyer has committed to making
+best efforts to complete the transaction. If he/she subsequently aborts the transaction, this
+amount will be transferred to the buyer.
+
+Seller Escrow Fee: 5mBTC
+Seller promises to include this amount with his transfer to the buyer. This 
+fee will be deducted and kept by the escrow.
+
+Buyer Escrow Fee: 5mBTC
+Buyer promises to include this amount with his deposit fee. This fee
+will be deducted and kept by the escrow.
+
+Bank Wire Sending Deadline: 2014-01-31 (YYYY-MM-DD) 13:20 (HH:mm)
+Buyer promises to make the transfer before the time indicated, as recorded in
+the timestamps of the internet traffic (timestamps in the decrypted 
+internet banking software will not constitute proof of time).
+
+Seller Proxy Service Agreement: 
+Seller promises to be logged in to escrow as negotiated
+with buyer after signing contract during the following 
+three periods:
+2014-01-25 1900-2100 UTC
+2014-01-26 1900-2100 UTC
+2014-01-27 1900-2100 UTC
+Failure to make the proxy service available during at least one
+of these periods may result in the loss of the seller's
+escrow deposit fee, which will be transferred to the buyer in this case.
+
+
+
+
+
+
+
+
+
+

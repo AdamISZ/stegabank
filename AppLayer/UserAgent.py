@@ -4,6 +4,8 @@ import shutil
 import shared
 import Agent
 import NetworkAudit.sharkutils as sharkutils
+from multisig_lspnr import multisig
+
 #for brevity
 def g(x,y):
     return shared.config.get(x,y)
@@ -34,6 +36,7 @@ class UserAgent(Agent.Agent):
         #the running ssh or plink process which we own
         self.ssh_proc = None
     
+
     #calling this function for a particular transaction means that the user
     #has decided to carry out the required next action.
     def takeAppropriateActions(self, txID):

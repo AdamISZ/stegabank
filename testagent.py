@@ -21,6 +21,13 @@ import os
 import time
 import re
 import shared
+import threading
+import json
+import Queue
+import BaseHTTPServer
+import SimpleHTTPServer
+from multisig_lspnr import multisig
+
 #for brevity
 def g(x,y):
     return shared.config.get(x,y)
@@ -32,153 +39,363 @@ from AppLayer import Transaction
 from AppLayer import Agent
 from AppLayer import UserAgent
 from AppLayer import EscrowAccessor
+from AppLayer import Contract
 import Messaging.MessageWrapper as Msg
 from NetworkAudit import sharkutils
 import Messaging
 #=====END LIBRARY IMPORTS==========
 
-def do_transaction(myself, role, escrow):
-    
-    #Instantiate a transaction based on user input
-    try:
-        role = shared.get_binary_user_input("Do you want to buy(B) or sell(S)?: "\
-                                            ,'b','buyer','s','seller')
-        ctrprty = shared.get_validated_input("Enter the bitcoin address of "+\
-                                             "your counterparty: ",str)
-        amount = shared.get_validated_input("Enter amount to trade: ",float)
-        price = shared.get_validated_input("Enter worst acceptable price in "+\
-                                        myself.baseCurrency+" per BTC: ",float)
-    
-    except:
-        shared.debug(0,["Error in command line agent execution. Quitting!"])
-        exit(1)
-        
-    #TODO: don't need to enter bank info,base dir or currency info here
-    counterparty = UserAgent(g("Directories","agent_base_dir"),\
-        ctrprty,g("Agent","bank_information"),\
-        g("Agent","base_currency"))
-    buyer = myself if role=='buyer' else counterparty
-    seller = myself if role=='seller' else counterparty
-    
-    #make a temporary transaction object with our data to cross check 
-    #with escrow response
-    tx = Transaction(buyer.uniqID(),seller.uniqID(),amount,price,buyer.baseCurrency)
-    #having collected enough info, we're ready to request a transaction:
-    myself.activeEscrow.requestTransaction(buyer=buyer,seller=seller, \
-                    amount=amount,price=price,curr=myself.baseCurrency)
-    #it is not NECESSARY for the counterparties to synchronize at this point;
-    #their request has been stored and the match of two requests can occur
-    #later. However, the intended approach is for buyer and seller to 
-    #do this part at the same time. So we wait for escrow response, understanding
-    #that the user may simply quit out at any time.
-    if not myself.activeEscrow.getResponseToTxnRq(tx):
-        shared.debug(0,["Attempt failed.Quitting."])
-        exit(1)
-    
-    #at this stage the escrow and counterparty have confirmed that the
-    #transaction represented by 'tx' is valid. It has been updated by reference.
-    shared.debug(1,["Transaction has been set to: ",tx.uniqID()])
-    
-    myself.doBankingSession(tx)
-    
 
-def do_dispute(myself,role,escrow):
-    myself.printCurrentTransactions()
-    tnum = shared.get_validated_input("Choose a transaction to dispute:",int)
-    tx = myself.transactions[tnum]
-        
-    escrow.sendInitiateL1DisputeRequest(tx)
+#the intention of this module is to provide an 
+#*interface* from the client app in the browser
+#to the underlying application layer
 
-    #wait for escrow to ask for the data
-    escrow.waitForSSLDataRequest(tx)
+workingContract = None
+#working on a maximum of one contract at a time
+contractLock = threading.Lock()
+
+#temporary storage queue for messages
+#passed from back-end to front-end
+qFrontEnd = Queue.Queue()
+workingCtrprtyPub = None
+myBtcAddress = None
+ddir = None
+
+if OS=='win':
+    stcppipe_exepath = os.path.join(ddir,'stcppipe', 'stcppipe.exe')
+    tshark_exepath = os.path.join(ddir,'wireshark', 'tshark.exe')
+    mergecap_exepath = os.path.join(ddir,'wireshark', 'mergecap.exe')
+    plink_exepath = os.path.join(ddir, 'plink.exe')    
+if OS=='linux':
+    stcppipe_exepath = os.path.join(ddir,'stcppipe', 'stcppipe')
+    tshark_exepath = 'tshark'
+    mergecap_exepath = 'mergecap'
     
-    my_ssl_data = ','.join(myself.getHashList(tx))
-    if role == 'buyer':
-        #need to send the magic hashes telling the escrow which other hashes
-        #to ignore in the comparison
-        my_ssl_data += '^'+','.join(myself.getMagicHashList(tx))
-    
-    #'x' is a dummy, we use default sending signature (TODO clean that up)    
-    escrow.sendMessages(messages={'x':'SSL_DATA_SEND:'+my_ssl_data},\
-                        transaction=tx,rs=703)
+firefox_exepath = 'firefox'
+ssh_exepath = 'ssh'
+
+#local port for ssh's port forwarding. Will be randomly chosen upon starting the tunnel
+random_ssh_port = 0
+#random TCP port on which firefox extension communicates with python backend
+FF_to_backend_port = 0
+#random port which FF uses as proxy port. Local stcppipe listens on this port and forwards traffic to random_ssh_port
+FF_proxy_port = 0
+
+#a thread which returns a value. This is achieved by passing self as the first argument to a called function
+#the calling function can then set self.retval
+class ThreadWithRetval(threading.Thread):
+    def __init__(self, target):
+        super(ThreadWithRetval, self).__init__(target=target, args = (self,))
+    retval = ''
+
+class StoppableHttpServer (BaseHTTPServer.HTTPServer):
+    """http server that reacts to self.stop flag"""
+    retval = ''
+    def serve_forever (self):
+        """Handle one request at a time until stopped. Optionally return a value"""
+        self.stop = False
+        while not self.stop:
+                self.handle_request()
+        return self.retval;
+
+#Receive HTTP HEAD requests from FF extension. This is how the extension communicates with python backend.
+class buyer_HandlerClass(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
+    protocol_version = "HTTP/1.1"      
+    global qFrontEnd
         
-def do_actions_menu(myself,role,escrow,actionables):
-    while True:
-        print "Current actions to be taken:"
-        for i,action in enumerate(actionables.items()):
-            print "["+str(i+1)+"] - Transaction: "+action[0][0:4]+"..."+"  "+action[1]
+    def do_HEAD(self):
+        global ssh_proc
+        global stcppipe_proc
+        global is_ssh_session_active                    
+                
+        if self.path.startswith('/sign_tx'):
+            print ('Received signing request')
+            raddr,mbal,myid,cpid = urllib2.unquote(self.path.split('?')[1]).split()
+            print ('Received a destination address: '+raddr)
+            print ('Received an owned balance: '+mbal)
+            print ('Received an owned id: '+myid)
+            print ('Received a ctrprty id: '+cpid)
+            sig = multisig.create_sig_for_redemption(myid,myid,cpid,mbal,0.0001,raddr)
             
-        choice = shared.get_validated_input("Enter an integer, or 0 to \
-                                            go back to main menu:",int)
-        if choice ==0:
+            self.send_response(200)
+            self.send_header("response","sign_tx")
+            if (sig):
+                self.send_header("result","success")
+            else:
+                self.send_header("result","failure")
+            self.end_headers()
             return
-        #Here we don't decide on the actual action to perform, rather just
-        #let the UserAgent object figure out which action it needs to perform
-        #based on the transaction that was chosen to address.
-        myself.takeAppropriateActions(actionables.items()[choice-1][0])
             
-if __name__ == "__main__":
-    
-    if len(sys.argv)>1:
-        config_file = sys.argv[1]
-    else:
-        config_file = 'ssllog.ini'
+        if self.path.startswith('/get_balance'):
+            print ('Received a request to get the balance')
+            addr = urllib2.unquote(self.path.split('?')[1])
+            conf,unconf = multisig.check_balance_at_multisig('x','x',addr=addr)
+            print ('got an unconf balance of: '+str(unconf))
+            self.send_response(200)
+            self.send_header("response","get_balance")
+            self.send_header("confirmedbalance",str(conf))
+            self.send_header("unconfirmedbalance",str(unconf))
+            self.end_headers()
+            return
+            
+        #chat message format going TO oracle: '<uniqueid_recipient> <type> [data..]'
+        if self.path.startswith('/send_chat'):
+            print ('Received a chat message send request')
+            #need everything after the first question mark, including question marks
+            chatdata = '?'.join(self.path.split('?')[1:])
+            chatdata = urllib2.unquote(chatdata)
+            params = chatdata.split()
+            if len(params[0]) != 64:
+                print ('Error: id of recipient wrong length')
+            print ('recipient is: '+params[0])
+            print ('type is: '+params[1])
+            print ('message is: '+' '.join(params[2:]))
+            send_chat_to_oracle(params[0],params[1],' '.join(params[2:]))
+            print ('Received a chat message and sent to oracle')
+            self.send_response(200)
+            self.send_header("response","send_chat")
+            self.end_headers()
+            return
         
-    #Load all necessary configurations:
-    helper_startup.loadconfig(config_file)
-    
-    role='agent'
-    #instantiate my instance of UserAgent
-    myself = UserAgent(g("Directories",role+"_base_dir"),\
-        g(role.title(),"btc_address"),g(role.title(),"bank_information"),\
-        g(role.title(),"base_currency"))
-    
-    #instantiate a blocking connection to the message queue
-    #TODO ssl connections with credentials (or similar)
-    try:
-        Msg.instantiateConnection(un=g(role.title(),role+"_rabbitmq_user"),\
-                              pw=g(role.title(),role+"_rabbitmq_pass"))
-    except:
-        shared.debug(0,["Failed to instantiate a connection to rabbitmq server",\
-                        "- maybe the escrow machine is down? Try pinging it.",\
-                        "Quitting."])
-        exit(1)
-    
-    #need to access escrow immediately to get an up to date list of transactions
-    escrow = EscrowAccessor(host=g("Escrow","escrow_host"),agent=myself,\
-    username=g(role.title(),"escrow_ssh_user"),\
-    password=g(role.title(),"escrow_ssh_pass"),\
-        port=g(role.title(),"escrow_input_port"),escrowID='123') 
-    
-    #activate the locally instantiated EscrowAccessor object
-    myself.addEscrow(escrow).setActiveEscrow(escrow)
-    
-    #collect messages with issues to be resolved
-    actionables = myself.processExistingTransactions()
-    #start with a menu
-    
-    while True:
-        print ("""Please choose an option:
-        [1] List current transactions
-        [2] Start a new transaction and do internet banking
-        [3] Dispute an existing transaction and send your ssl records
-        [4] List existing unresolved transactions
-        [5] Exit
-        """)
-        choice = shared.get_validated_input("Enter an integer:",int)
-        if choice==1:
-            myself.activeEscrow.synchronizeTransactions()
-        elif choice == 2:
-            do_transaction(myself,role,escrow)
-        elif choice == 3:
-            do_dispute(myself,role,escrow)
-        elif choice == 4:
-            #collect issues to be actioned for each transaction
-            actionables = myself.processExistingTransactions()
-            do_actions_menu(myself,role,escrow,actionables)
-        elif choice == 5:
-            exit(0)
-        else:
-            print "invalid choice. Try again."
+        #chat message format coming FROM oracle: '<uniqueid_sender> <type> [data...]' 
+        if self.path.startswith('/receive_chat'):
+            m=''
+            type=''
+            value=''
+            sender=''
+            try:  
+                m = q.get_nowait()
+                if not m.strip().split():
+                    sender = 'none'
+                else:
+                    sender = m.split()[0]
+                    type = m.split()[1]
+                    value = ' '.join(m.split()[2:])
+            except Queue.Empty:
+                pass
+            if not m:
+                sender='none'
+            self.send_response(200)
+            self.send_header("response","receive_chat")
+            self.send_header("sender",sender)
+            self.send_header("type",type)
+            self.send_header("value",value)
+            self.end_headers()
+            return
+        
+        if self.path.startswith('/start_tunnel'):
+            arg_str = self.path.split('?')[1]
+            args = arg_str.split(";")
+            if ALPHA_TESTING:
+                key_name = "alphatest.txt"
+            global assigned_port
+            assigned_port = args[1]
+            retval = start_tunnel(key_name, args[0])
+            print ('Sending back: '+retval + assigned_port)
+            if retval == 'reconnect':
+                self.send_response(200)
+                self.send_header("response", "start_tunnel")
+                #assigned_port now contains the new port which sshd wants us to reconnect to
+                self.send_header("value", "reconnect;"+assigned_port)
+                self.end_headers()                
+            if retval != 'success':
+                print ('Error while setting up a tunnel: '+retval, end='\r\n')
+            self.send_response(200)
+            self.send_header("response", "start_tunnel")
+            self.send_header("value", retval)
+            self.end_headers()
+            return     
+        
+        if self.path.startswith('/terminate'):
+            if is_ssh_session_active: 
+                os.kill(stcppipe_proc.pid, signal.SIGTERM)
+                ssh_proc.stdin.write("exit\n")
+                ssh_proc.stdin.flush()
+                is_ssh_session_active = False              
+            self.send_response(200)
+            self.send_header("response", "terminate")
+            self.send_header("value", "success")
+            self.end_headers()
+            time.sleep(2)
+            return      
+            
+        if self.path.startswith('/started'):
+            global is_ff_started
+            is_ff_started = True
+            self.send_response(200)
+            self.send_header("response", "started")
+            self.send_header("value", "success")
+            self.end_headers()
+            return
 
+#use miniHTTP server to receive commands from Firefox addon and respond to them
+def buyer_start_minihttp_thread(parentthread):
+    global FF_to_backend_port
+    print ('Starting mini http server to communicate with Firefox plugin',end='\r\n')
+    try:
+        httpd = StoppableHttpServer(('127.0.0.1', FF_to_backend_port), buyer_HandlerClass)
+    except Exception, e:
+        print ('Error starting mini http server', e,end='\r\n')
+        exit(1)
+    sa = httpd.socket.getsockname()
+    print ("Serving HTTP on", sa[0], "port", sa[1], "...",end='\r\n')
+    retval = httpd.serve_forever()
+
+    
+def setup(btcAddress):
+    global myBtcAddress, ddir
+    myBtcAddress = btcAddress
+    shared.makedir([g("DATA_DIRS","Personal Data"),myBtcAddress])
+    
+#this basically just consists of asking the
+#escrow if the counterparty is currently online
+def initiateChatWithCtrprty(ctrprty):
+    msg = {'0.'+myBtcAddress:'QUERY_STATUS:'+ctrprty}    
+    Msg.sendMessages(msg,escrow)
+    rspns = Msg.getSingleMessage(myBtcAddress,timeout=5)
+    for k,v in rspns.iteritems():
+        if 'ONLINE' in m:
+            return True
+    return False
+
+def sendChatToCtrprty(ctrprty,msgToSend,tx=None):
+    #tx will be set after contracts signed
+    if not tx:
+        tx='0'
+    msg = {tx+'.'+myBtcAddress:'CHAT_MESSAGE:'+msgToSend}
+    Msg.sendMessages(msg,ctrprty)
+    
+
+#'contractDetails' will be a dict
+#passed in from the client interface
+#a False return indicates you tried to sign a contract
+#which didn't match the one sent by your counterparty
+def signContractCNE(contractDetails):
+    
+    global workingContract
+    tmpContract = Contract.Contract(contractDetails)
+    if not workingContract:
+        workingContract = tmpContract    
+    else:
+        tmpContract = Contract.Contract(contractDetails)
+        if not tmpContract==workingContract:
+            return False
+        
+    #for multisigs and for signing during this tx
+    addr,pub,priv = multisig.create_tmp_address_and_store_keypair(workingContract.textHash)
+    
+    sig = multisig.ecdsa_sign(workingContract.textHash,priv)
+    
+    contractLock.acquire()
+    try:
+        workingContract.sign(myBtcAddress,sig)
+    finally:
+        contractLock.release()
+    
+    if len(workingContract.signatures.keys()) > 1:
+        #2 signatures is ready to send
+        sendSignedContractToEscrowCNE()
+    
+    return True
+
+#contract has been sent by counterparty
+#we need to (a) look at it, (b) validate the signature
+#(c) sign and send back (if we like it).
+def receiveContractCNE(msg):
+    global workingCtrprtyPub,myBtcAddress,workingContract
+    
+    ctrprtyPub,contractDetails,ctrprtySig = msg.split(':')[1].split('|')
+    #the contract is in json; need to change it to a Contract object
+    contractDetails = json.loads(contractDetails)
+    
+    workingCtrprtyPub = ctrprtyPub
+    
+    #check the sig
+    tmpContract = Contract.Contract(contractDetails)
+    valid = False
+    for k,v in tmpContract.signatures.iteritems():
+        if (k != myBtcAddress):
+            valid = multisig.ecdsa_verify(tmpContract.textHash,v,ctrprtyPub)
+            ctrprtyAddress = k
+    if not valid:
+        shared.debug(1,['Error: no valid signature from counterparty'])
+        return 'Invalid contract signature'
+    contractLock.acquire()
+    try:
+        workingContract = tmpContract
+    finally:
+        contractLock.release()
+    
+    return 'Signed contract successfully received from counterparty: '+ctrprtyAddress
+
+#send a json dump of the contract contents
+#optionally also send to the chosen escrow
+def sendSignedContractToCtrprtyCNE(escrow=False):
+    
+    #should already be signed
+    if not workingContract.isSigned:
+        return False
+    
+    #the counterparty is in the contract:
+    for addr in [workingContract.text['Buyer BTC Address'],\
+                 workingContract.text['Seller BTC Address']]:
+        if addr != myBtcAddress:
+            ctrprty = addr
+            
+    #get our pubkey, since the ctrprty needs it to verify the sig
+    pub = multisig.getKeysFromUniqueID(myBtcAddress)
+    
+    if not workingContract.signatures:
+        shared.debug(0,["Error: tried to send an unsigned contract."])
+    msg_details = [pub,workingContract.getContractText()]
+    msg_details.extend([v for k,v in workingContract.signatures.iteritems()])
+    msg = {workingContract.textHash+'.'+myBtcAddress:'CNE_SIGNED_CONTRACT:'+\
+           '|'.join(msg_details)}
+    Msg.sendMessages(msg,ctrprty)
+    if escrow:
+        Msg.sendMessages(msg,escrow)      
+    return True
+
+#messages coming from the "back end"
+#(escrow MQ server) will either be processed
+#directly by Python or sent to the front end
+#for display
+#MQ syntax will be isolated here
+def processInboundMessages():
+    #infinite loop for getting messages
+    while True:
+        time.sleep(1)
+        msg = Msg.getSingleMessage(myBtcAddress)
+        for t,m in msg.iteritems():
+            if 'CNE_SIGNED_CONTRACT' in m:
+                response = receiveContractCNE(m)
+                #let the front end know we got it etc.
+                qFrontEnd.put('CONTRACT RECEIVED:'+response)
+                
+            elif 'CNE_CHAT' in m:
+                qFrontEnd.put('CHAT RECEIVED:'+t.split('.')[1]+':'+m.split(':')[1:])
+            
+            elif 'QUERY_STATUS_RESPONSE' in m:
+                #status is online or offline (counterparty was specified in request)
+                qFrontEnd.put('QUERY_STATUS_RESPONSE'+m.split(':')[1])
+                
+                
+                
+if __name__ == "__main__":
+    #first connect to CNE
+    #code for reading order books and choosing escrow here?
+    
+    #need a connection to an escrow to do anything
+    Msg.instantiateConnection()
+    
+    #for responding to messages from the escrow MQ server
+    receiverThread = ThreadWithRetval(target= processInboundMessages)
+    receiverThread.daemon = True
+    receiverThread.start()  
+    
+    FF_to_backend_port = random.randint(1025,65535)
+    FF_proxy_port = random.randint(1025,65535)
+    thread = ThreadWithRetval(target= buyer_start_minihttp_thread)
+    thread.daemon = True
+    thread.start()    
 

@@ -29,7 +29,14 @@ class EscrowAccessor(object):
             #for now this is dealt with ungracefully, but we can do better TODO
             shared.debug(0,["Serious problem, we failed to synchronize transactions"])
             exit(1)
-                
+    
+    def requestCNESession(escrowid):
+        pass
+            
+    def requestChatSession(ctrpryid):
+        pass
+            
+            
     #Important: it's guaranteed that self.agent has already loaded its 
     #transactions.p database since that action occurs in the Agent constructor.
     #Callers MUST pay attention to return value; if false, the sync failed

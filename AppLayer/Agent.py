@@ -2,6 +2,7 @@ import os
 import shared
 import pickle
 import hashlib
+import multisig_lspnr.multisig as multisig
 import NetworkAudit.sharkutils as sharkutils
 #for brevity
 def g(x,y):
@@ -15,15 +16,16 @@ class Agent(object):
         print "instantiating an agent"
         #all agents must have a base directory for storing data
         self.baseDir = basedir
-        #all agents must register a bitcoin address
-        self.BTCAddress = btcadd
+        #all agents must register a bitcoin address; this is NOT the btc address used to talk to other parties,
+        #but the btc address used to withdraw to outside the app
+        self.btcAddress = btcadd
         #all agents must have a default currency as numeraire for btc price
         self.baseCurrency = currency
         #all agents should store their OS details for communication with other agents
         self.OS = shared.OS
         #persistent store of incomplete transactions connected to this agent;
         #initially empty
-        self.txFile = os.path.join(self.baseDir,'transactions'+self.BTCAddress+'.p')
+        self.txFile = os.path.join(self.baseDir,'transactions'+self.btcAddress+'.p')
         if os.path.exists(self.txFile):
             with open(self.txFile) as txf:
                 self.transactions = pickle.load(txf)
@@ -123,12 +125,8 @@ class Agent(object):
         print "setting up network architecture"
                   
     def uniqID(self):
-        return self.BTCAddress
+        return self.btcAddress
 
-#after a lot of messing about I decided to stick with just ID=bitcoin address    
-''' __repr__(self):
-        string_rep = ['dir':self.baseDir,'btcadd':self.btcadd,'currency':self.baseCurrency]
-        for property in [self.baseDir,self.btcadd,self.baseCurrency]
-        string_rep.append(str(key)+'='+str(value))
+    def signContract(self, contract):
+        return multisig.signText(contract,pub)
         
-        return '^'+'|'.join(string_rep)+'^' '''

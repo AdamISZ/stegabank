@@ -9,7 +9,7 @@ Messaging Protocol for the ssl log escrow server running rabbitMQ:
 
 4. Messages to counterparty only must have "counterpartyID"
 
-5. Each message in the dict messages is of form {'topic':'message'}
+5. Each message in the dict messages is of form {'topic':'message'} (stored in a string as topic|message)
 
 6. The 'topic' field will contain <the ID of the transaction>.<the ID of the sender>
 
@@ -22,6 +22,10 @@ Messaging Protocol for the ssl log escrow server running rabbitMQ:
 9. If the message is not one of [TRANSACTION_SYNC_REQUEST,TRANSACTION_SYNC_RESPONSE,TRANSACTION_SYNC_COMPLETE], then the first data item in (8) MUST be a new transaction state (in case of message TO escrow, this is a request which may or may not be agreed to; in case of message FROM escrow, this is a confirmation/statement of fact).
 
 10. List of MSGTYPES:
+QUERY_STATUS - data are: counterparty id (=btc address)
+QUERY_STATUS_RESPONSE: data are: 'ONLINE' or 'OFFLINE'
+CNE_SIGNED_CONTRACT - data are: pubkey|contract text (json)|signature
+CNE_CHAT - data are: chatmessage
 REQUEST_REJECTED - data are:reason
 CLIENT_ALIVE_REQUEST - data are: none
 CLIENT_ALIVE_RESPONSE - data are: none
@@ -55,4 +59,4 @@ DISPUTE_L2_SEND_SSL_KEYS - data are: [CLIENT RANDOM/RSA],random,master secret,..
 DISPUTE_L2_SEND_HTML_EVIDENCE - data are: html src, html src,...
 TRANSACTION_SUCCESS_REQUEST - data are: none
 TRANSACTION_SUCCESS_REQUEST_ACCEPTED - data are: none
-<TBC>
+

@@ -11,6 +11,13 @@ import helper_startup as hs
 def g(x,y):
     return shared.config.get(x,y)
 
+#a thread which returns a value. This is achieved by passing self as the first argument to a called function
+#the calling function can then set self.retval
+class ThreadWithRetval(threading.Thread):
+    def __init__(self, target):
+        super(ThreadWithRetval, self).__init__(target=target, args = (self,))
+    retval = ''
+    
 #this object runs on the escrow server
 class EscrowAgent(Agent.Agent):
     
@@ -36,11 +43,7 @@ class EscrowAgent(Agent.Agent):
         #from the MQ. The format is a list of lists, each inner list having
         #a key,message pair [k,m]
         self.requestStore=[]
-        
-        #a list of list of hashes; same comments as for requeststore above
-        self.hashStore={}
-        self.magicStore={}
-        
+    
     def run(self):
         #the main loop to be called for the daemon meaning we're
         #listening for messages/requests/instructions from useragents.
@@ -48,7 +51,7 @@ class EscrowAgent(Agent.Agent):
             
             #if any transaction is in a state where we have to do 
             #something without client input
-            self.takeAppropriateActions()
+            #self.takeAppropriateActions()
             
             msg = self.getSingleMessage(5)
             if not msg:
@@ -58,56 +61,84 @@ class EscrowAgent(Agent.Agent):
             k,m = msg.items()[0]
             txID, requester = k.split('.')
             #check: is the request asking for information only?
-            if 'TRANSACTION_SYNC_REQUEST:' in m:
-                self.sendTransactionSynchronization([k,m])
+            #if 'TRANSACTION_SYNC_REQUEST:' in m:
+                #self.sendTransactionSynchronization([k,m])
+                #continue
+            
+            if 'CNE_SIGNED_CONTRACT:' in m:
+                self.receiveContract([k,m])
                 continue
             
-            #the message is about a transaction; find it in the db:
-            tx = self.getTxByID(k.split('.')[0])
-            if (not tx) and ('TRANSACTION_REQUEST' not in m):
-                self.sendMessages(messages={'0.'+self.escrowID:\
-                'REQUEST_REJECTED:0,No such transaction'},recipientID=requester)
-                continue
+            ##the message is about a transaction; find it in the db:
+            #tx = self.getTxByID(k.split('.')[0])
+            #if (not tx) and ('TRANSACTION_REQUEST' not in m):
+                #self.sendMessages(messages={'0.'+self.escrowID:\
+                #'REQUEST_REJECTED:0,No such transaction'},recipientID=requester)
+                #continue
                     
             #check that request asks for a valid transition
-            if tx:
-                if int(m.split(':')[1].split(',')[0]) not in shared.vtst[tx.state]:
-                    self.sendMessages(messages={txID+'.'+self.escrowID:\
-                    'REQUEST_REJECTED:'+str(tx.state)+',You cannot do that.'},\
-                                      recipientID=requester)
-                    continue
+            #if tx:
+                #if int(m.split(':')[1].split(',')[0]) not in shared.vtst[tx.state]:
+                    #self.sendMessages(messages={txID+'.'+self.escrowID:\
+                    #'REQUEST_REJECTED:'+str(tx.state)+',You cannot do that.'},\
+                                      #recipientID=requester)
+                    #continue
             
             # from here we know that the requester has asked to do
             # something legal to one of its transactions
             # This is effectively a switch/case situation.
             # may look into a more Pythonic way of doing it later TODO
-            if 'TRANSACTION_REQUEST' in m:
-                self.processTransactionRequest([k,m]) 
-                continue
+            #if 'TRANSACTION_REQUEST' in m:
+                #self.processTransactionRequest([k,m]) 
+                #continue
             
-            elif 'TRANSACTION_ABORT' in m:
-                #TODO: self.abortTransaction([k,m])
-                continue
+            #elif 'TRANSACTION_ABORT' in m:
+                ##TODO: self.abortTransaction([k,m])
+                #continue
             
-            elif 'BANK_SESSION_START_REQUEST' in m:
-                self.negotiateBankSessionStartRequest([k,m])
-                continue
+            #elif 'BANK_SESSION_START_REQUEST' in m:
+                #self.negotiateBankSessionStartRequest([k,m])
+                #continue
             
-            elif 'BANK_SESSION_ENDED' in m:
-                self.cleanUpBankSession([k,m])
-                continue
+            #elif 'BANK_SESSION_ENDED' in m:
+                #self.cleanUpBankSession([k,m])
+                #continue
                 
-            elif 'DISPUTE_L1_REQUEST' in m:
-                self.requestSSLHashes([k,m])
-                continue
+            #elif 'DISPUTE_L1_REQUEST' in m:
+                #self.requestSSLHashes([k,m])
+                #continue
                 
-            elif 'SSL_DATA_SEND' in m:
-                self.receiveSSLHashes({k:m})
-                continue
+            #elif 'SSL_DATA_SEND' in m:
+                #self.receiveSSLHashes({k:m})
+                #continue
             
-            elif 'DISPUTE_L2_SEND_SSL_KEYS' in m:
-                self.receiveSSLKeysAndSendHtml([k,m])
-                continue
+            #elif 'DISPUTE_L2_SEND_SSL_KEYS' in m:
+                #self.receiveSSLKeysAndSendHtml([k,m])
+                #continue       
+    
+    #note that "receive contract" in this model also serves 
+    #the role of "transaction request".
+    def receiveContract(self,msg):
+        #escrow must first read the contents of the contract
+        #and build the transaction object.
+        #It should also validate the signature of the contract
+        #based on the sender.
+        #If the transaction object is found to already exist,
+        #it should send messages back to both parties indicating
+        #the new state CNE_CONTRACTS_SIGNED.
+        sender = msg[0].split('.')[1]
+        pub,contract,sig = msg[1].split(':')[1].split(',')
+        if not multisig.ecdsa_raw_verify(contract,sig,pub):
+            print "contract signature failed"
+            #TODO send a failure message to client
+            #don't create a tx object
+        else:
+            #signature was valid
+            #parse the contract to make a transaction
+            #object:
+            
+            
+    
     
     def takeAppropriateActions(self):
         
