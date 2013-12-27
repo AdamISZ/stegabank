@@ -66,6 +66,10 @@ def sendMessages(messages={},recipientID=''):
         
     return True
 
+def purgeMQ(recipientID):
+    global chan
+    chan.queue_delete(queue=recipientID)
+    
 def getSingleMessage(recipientID,timeout=1):
     global chan 
     chan.queue_declare(queue=recipientID)

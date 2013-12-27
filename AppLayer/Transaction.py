@@ -21,11 +21,14 @@ class Transaction():
         #explicitly, because the escrow will need
         #to refer to them often in order to manage
         #the transaction state by use of messaging
-        self.buyer = contract.text['Buyer Bitcoin Address']
-        self.seller = contract.text['Seller Bitcoin Address']
+        self.buyer = contract.text['Buyer BTC Address']
+        self.seller = contract.text['Seller BTC Address']
         
         #state machine described above
         self.state = state
+        
+        #for waiting for deadlines
+        self.deadline=None
         
         #locally stored key file with all keys for this transaction
         #set by buyer only at end of banking session
@@ -36,6 +39,14 @@ class Transaction():
     def uniqID(self):
         return self.contract.textHash
     
+    def setDeadline(self, timePeriod):
+        self.deadline = int(time.time())+timePeriod
+    
+    def timedOut(self):
+        if int(time.time())>self.deadline:
+            self.deadline=None
+            return True
+        return False
     
     def getRole(self,agentID):
         if agentID==self.buyer: return 'buyer'

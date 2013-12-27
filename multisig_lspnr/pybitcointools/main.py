@@ -168,9 +168,10 @@ def sha256(string):
     return bin_sha256(string).encode('hex')
 
 def bin_dbl_sha256(string):
-   return hashlib.sha256(hashlib.sha256(string).digest()).digest()
+    return hashlib.sha256(hashlib.sha256(string).digest()).digest()
+ 
 def dbl_sha256(string):
-   return bin_dbl_sha256(string).encode('hex')
+    return bin_dbl_sha256(string).encode('hex')
 
 def bin_slowsha(string):
     orig_input = string
@@ -290,8 +291,8 @@ def ecdsa_raw_verify(msghash,vrs,pub):
     u1, u2 = z*w % N, r*w % N
     x,y = base10_add(base10_multiply(G,u1), base10_multiply(pub_to_point(pub),u2))
 
-    return r == x
-
+    return r == x      
+      
 def ecdsa_verify(msg,sig,pub):
     return ecdsa_raw_verify(electrum_sig_hash(msg),decode_sig(sig),pub)
 

@@ -17,40 +17,10 @@ class Contract(object):
                  #buyerEscrowFee,paymentSendingDeadline,sellerProxyServiceAgreement,\
                  #buyerBankDetails=None,sellerBankDetails=None,creationDate=None):
     def __init__(self,contractDetailsDict):
-        print "instantiating a contract"
-        
-        #note that the 'btc' fields are addresses for RECEIPT
-        #of bitcoins during the protocol. This is to allow
-        #all crypto- transactions to occur using pubkeys generated
-        #on the fly (which can be nearly entirely hidden from users)
-        #while not having the feature-creep of including a wallet
-        #in this codebase.
-        #self.text={'Buyer BTC Address':buyerBtc,
-        #'Seller BTC Address':sellerBtc,
-        #'Fiat Currency ISO':fiatCcyIso,
-        #'Fiat Currency Amount':fiatCcyAmt,
-        #'BTC Amount':btcAmt,
-        #'Buyer Bank Details':buyerBankDetails,
-        #'Seller Bank Details':sellerBankDetails,
-        #'Seller Deposit Fee':sellerDepositFee,
-        #'Buyer Deposit Fee':buyerDepositFee,
-        #'Seller Escrow Fee':sellerEscrowFee,
-        #'Buyer Escrow Fee':buyerEscrowFee,
-        #'Bank Wire Sending Deadline':paymentSendingDeadline,
-        #'Seller Proxy Service Agreement':sellerProxyServiceAgreement}
-        
-        self.text = contractDetailsDict
-        
-        #if this is a new contract, it will
-        #not yet have a creation timestamp,
-        #in which case, set it now
-        #if not creationDate:
-            #self.creationDate = int(time.time()) #to the nearest second, since the epoch
-        #else:
-            #self.creationDate=creationDate        
-        
+        shared.debug(0,["\n instantiating a contract \n"])
+        self.text = contractDetailsDict 
         #hash the contents
-        self.textHash=hashlib.md5(self.getContractText()).hexdigest()
+        self.setHash()
         #no signature on creation
         self.isSigned=False
         #allow multiple signatures "appended"
@@ -67,8 +37,26 @@ class Contract(object):
             self.signatures[addr]=signature
             return True
     
+    #output JSON for messaging
     def getContractText(self):
         return json.dumps(self.text)
+    
+    #output the contents in a deterministic
+    #order for signing
+    def getContractTextOrdered(self):
+        a = []
+        for k,v in sorted(self.text.iteritems()):
+            a.extend([k,v])
+        #curious bug; without 'str', this gives a ascii/unicode error!?
+        return str(','.join(a))
+    
+    #callers can only modify like this!
+    def modify(self,param,val):
+        self.text[param]=val
+        self.setHash()
+    
+    def setHash(self):
+        self.textHash = hashlib.md5(self.getContractTextOrdered()).hexdigest()
         
     def __eq__(self, other):
             if self.text == other.text:

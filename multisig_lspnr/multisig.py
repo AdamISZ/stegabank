@@ -1,26 +1,29 @@
 import random, os, json, sys, ast, time
 from pybitcointools import *
 import electrumaccessor as ea
-
+import shared
 #this should be defined in a config - MultsigStorageDirectory
 msd = '/some/directory/for/multisig/files'
 
 #This should be set in set_escrow_pubkey before doing anything
 escrow_pubkey='045e1a2a55ccf714e72b9ca51b89979575aad326ba21e15702bbf4e1000279dc72208abd3477921064323b0254c9ead6367ebce17da3ad6037f7a823d65e957b20'
 
-
-def set_escrow_pubkey(pubkey):
-    global escrow_pubkey
-    escrow_pubkey = pubkey
+def initialise(pubkey,d):
+    global escrow_pubkey,msd
+    escrow_pubkey = pubkey  
+    shared.makedir([d])
+    msd = d
     
 #uniqueid is the unique transaction identifier allowing the user to correlate
 #his keys with the transaction; calling modules are tasked with constructing it
-def create_tmp_address_and_store_keypair(uniqueid):
+def create_tmp_address_and_store_keypair(uniqueid=None):
     #no brainwalleting; not safe (but RNG should be considered)
     priv = sha256(str(random.randrange(2**256)))
     pub = privtopub(priv)
     addr = pubtoaddr(pub)
     #write data to file
+    if not uniqueid:
+        uniqueid=addr
     with open(os.path.join(msd,uniqueid+'.private'),'wb') as f:
         f.write('DO NOT LOSE, ALTER OR SHARE THIS FILE - WITHOUT THIS FILE, YOUR MONEY IS AT RISK. BACK UP! YOU HAVE BEEN WARNED!\r\n')
         f.write(addr+'\r\n')
@@ -33,17 +36,16 @@ def create_tmp_address_and_store_keypair(uniqueid):
 
 #TODO: Gracefully handle error of non-existence of private key
 def getKeysFromUniqueID(uniqueid):
-    with open(os.path.join(msd,uniqueid1+'.private')) as f:
+    with open(os.path.join(msd,uniqueid+'.private')) as f:
+        f.readline()
         f.readline()
         pub = f.readline().strip()
         priv = f.readline().strip()
     return pub,priv
-
-def get PubFromUniqID(uniqueid):
     
 def signText(uniqueid, text):
     pub,priv = getKeysFromUniqueID(uniqueid)
-    sig = ecdsa_raw_sign(text,priv)
+    sig = ecdsa_sign(text,priv)
     return (text, sig)
 
 def verifyText(text,sig,pub):
@@ -61,6 +63,7 @@ def store_share(pubkey,uniqueid):
 #payment INTO the multisig address, by seller, happens outside the application
 #uniqueid1 is YOU, 2 is counterparty, in case this is called from web app
 def create_multisig_address(uniqueid1,uniqueid2):
+    
     pubs = get_ordered_pubkeys(uniqueid1, uniqueid2)
     if not pubs:
         return ('','')

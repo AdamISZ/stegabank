@@ -23,8 +23,10 @@ Messaging Protocol for the ssl log escrow server running rabbitMQ:
 
 10. List of MSGTYPES:
 QUERY_STATUS - data are: counterparty id (=btc address)
-QUERY_STATUS_RESPONSE: data are: 'ONLINE' or 'OFFLINE'
-CNE_SIGNED_CONTRACT - data are: pubkey|contract text (json)|signature
+QUERY_STATUS_RESPONSE: data are: 'ONLINE' or 'OFFLINE' or 'BUSY'
+CNE_SIGNED_CONTRACT - data are: contract text (json)|signature
+CNE_CONTRACTS_SIGNED - data are:BuyerBTCAddress,SellerBTCAddress,ContractHash
+CNE_CONTRACT_SIG_FAIL - data are: contract hash
 CNE_CHAT - data are: chatmessage
 REQUEST_REJECTED - data are:reason
 CLIENT_ALIVE_REQUEST - data are: none

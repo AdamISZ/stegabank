@@ -2,8 +2,8 @@ import os
 import shared
 import pickle
 import hashlib
-import multisig_lspnr.multisig as multisig
-import NetworkAudit.sharkutils as sharkutils
+#import multisig_lspnr.multisig as multisig
+#import NetworkAudit.sharkutils as sharkutils
 #for brevity
 def g(x,y):
     return shared.config.get(x,y)
@@ -125,8 +125,4 @@ class Agent(object):
         print "setting up network architecture"
                   
     def uniqID(self):
-        return self.btcAddress
-
-    def signContract(self, contract):
-        return multisig.signText(contract,pub)
-        
+        return self.btcAddress        

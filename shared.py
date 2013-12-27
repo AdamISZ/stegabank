@@ -9,7 +9,7 @@ import ConfigParser
 import subprocess
 import re
 import helper_startup
-import psutil
+#import psutil
 
 config = ConfigParser.ConfigParser()
 
