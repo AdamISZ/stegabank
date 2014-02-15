@@ -4,17 +4,17 @@ import sys, time, json, types, string, exceptions
 import socket
 
 DEFAULT_SERVERS = {
-    'electrum.coinwallet.me': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
+    #'electrum.coinwallet.me': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
     'electrum.hachre.de': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
     'electrum.novit.ro': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
     'electrum.stepkrav.pw': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
     #'ecdsa.org': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
     'electrum.no-ip.org': {'h': '80', 's': '50002', 't': '50001', 'g': '443'},
     'electrum.drollette.com': {'h': '5000', 's': '50002', 't': '50001', 'g': '8082'},
-    'btc.it-zone.org': {'h': '80', 's': '110', 't': '50001', 'g': '443'},
+    'electrum.random.re': {'h': '80', 's': '110', 't': '50001', 'g': '443'},
     'btc.medoix.com': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
-    'spv.nybex.com': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
-    'electrum.pdmc.net': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
+    'electrum.stupidfoot.com': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
+    #'electrum.pdmc.net': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
     'electrum.be': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'}
 }
 
@@ -145,7 +145,7 @@ def send_tcp(messages):
     for m in messages:
         method, params = m 
         request = json.dumps( { 'id':message_id, 'method':method, 'params':params } )
-        print "-->", request
+        #print "-->", request
         message_id += 1
         out += request + '\n'
         while out:

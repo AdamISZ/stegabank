@@ -1,6 +1,6 @@
 #escrow.py - daemon to run the escrow
 #=====LIBRARY IMPORTS===============
-import os
+import os, sys
 import shared
 #for brevity
 def g(x,y):
@@ -16,12 +16,14 @@ logging.getLogger('pika').setLevel(logging.DEBUG)
 if __name__ == "__main__":
     #Load all necessary configurations:
     #========================
-    helper_startup.loadconfig('ssllog.ini')
+    print sys.argv[1]
+    helper_startup.loadconfig(sys.argv[1])
     
     #In the next section we instantiate the escrow agent object
     myself = EscrowAgent(g("Directories","escrow_base_dir"),\
-                    g("Escrow","btc_address"))
-    myself.run()
+                    g("Escrow","escrow_id"))
+    myself.printCurrentTransactions()
+    myself.run(sys.argv[2])
     
 
 

@@ -75,10 +75,10 @@ class EscrowAccessor(object):
             
             hdr, data = hdr_and_data
             
-            if hdr == 'TRANSACTION_SYNC_COMPLETE':
+            if hdr == 'RE_TRANSACTION_SYNC_COMPLETE':
                 break
             
-            if hdr != 'TRANSACTION_SYNC_RESPONSE':
+            if hdr != 'RE_TRANSACTION_SYNC_RESPONSE':
                 shared.debug(0,["The message server sent a wrong message in the"\
                                 "stream of transaction data."])
                 continue
@@ -311,31 +311,3 @@ if role=='buyer' else \
     "a decision and made an award."])
                     return m.split(':')[-1].split(',')
     
-#========MESSAGING FUNCTIONS======================                
-    def sendMessages(self,messages={},recipientID='',transaction=None,rs=0):
-        recipientID = self.uniqID if recipientID == '' else recipientID
-        
-        #this standardised way is the preferable way to send messages
-        #with format set automatically
-        if transaction:
-            if rs==0:
-                shared.debug(0,["Critical error, you tried to use the automatic",\
-                                "message construction feature without setting",\
-                                "the requested state field. Quitting."])
-                exit(1)
-                
-            m = messages.values()[0].split(':')[0]+':'+str(rs)
-            if len(messages.values()[0].split(':'))>1:
-                m+=','
-                m += ','.join(messages.values()[0].split(':')[1].split(','))
-                
-            messages = {transaction.uniqID()+'.'+self.agent.uniqID():m}
-        
-        shared.debug(0,["About to send a message to",recipientID])
-        return Msg.sendMessages(messages,recipientID=recipientID)
-        
-    
-    def getSingleMessage(self,timeout=1):
-        return Msg.getSingleMessage(self.agent.uniqID(),timeout)
-        
-#============END MESSAGING FUNCTIONS===============================

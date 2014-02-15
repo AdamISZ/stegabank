@@ -1,6 +1,9 @@
 import time
+import math
 import os
 import pickle
+import Queue
+import threading
 import shared
 import Agent
 from AppLayer.Transaction import Transaction
@@ -14,13 +17,8 @@ import json
 def g(x,y):
     return shared.config.get(x,y)
 
-#a thread which returns a value. This is achieved by passing self as the first argument to a called function
-#the calling function can then set self.retval
-#class ThreadWithRetval(threading.Thread):
-    #def __init__(self, target):
-        #super(ThreadWithRetval, self).__init__(target=target, args = (self,))
-    #retval = ''
-    
+
+
 #this object runs on the escrow server
 class EscrowAgent(Agent.Agent):
     
@@ -35,10 +33,10 @@ class EscrowAgent(Agent.Agent):
         Msg.instantiateConnection(un='escrow',pw='escrow')
         
         #hardcoded for testing TODO
-        self.escrowID='123'
+        self.escrowID=btcaddress
         
-        #in case of escalation to human adjudication
-        self.superEscrow = 'adam111'
+        #get the public list of escrows for propagation to RE
+        self.escrowList = self.getEscrowList()
         
         #this  needs to be persisted as it contains
         #state information - in order to accept requests involving two parties,
@@ -46,21 +44,28 @@ class EscrowAgent(Agent.Agent):
         #from the MQ. The format is a list of lists, each inner list having
         #a key,message pair [k,m]
         self.requestStore=[]
+        
+        d = os.path.join(g("Directories","escrow_base_dir"),"multisig_store")
+        p = g("Escrow","escrow_pubkey")
+        #initialise multisig
+        multisig.initialise(p,d)        
+        
     
-    def run(self):
+    def run(self,escrowRole='cne'):
         #the main loop to be called for the daemon meaning we're
         #listening for messages/requests/instructions from useragents.
+        if escrowRole=='re':
+            self.runRE()
+            return
+        elif escrowRole != 'cne':
+            shared.debug(0,["Error! Role must be cne or re"])
+            exit(1)
+        
         while True:
             
-            #if any transaction is in a state where we have to do 
-            #something without client input
-            #self.takeAppropriateActions()
+            #deal with transactions
+            self.takeAppropriateActions() 
             
-            for t in self.transactions:
-                if t.deadline:
-                    if t.timedOut():
-                        
-                    
             msg = self.getSingleMessage(5)
             if not msg:
                 shared.debug(0,["Got nothing, waiting.."])
@@ -68,14 +73,146 @@ class EscrowAgent(Agent.Agent):
             
             k,m = msg.items()[0]
             txID, requester = k.split('.')
-            #check: is the request asking for information only?
-            #if 'TRANSACTION_SYNC_REQUEST:' in m:
-                #self.sendTransactionSynchronization([k,m])
-                #continue
             
             if 'CNE_SIGNED_CONTRACT:' in m:
-                verdict,data,contract = self.receiveContract([k,m])
+                verdict,data,contract = self.receiveContractCNE([k,m])
                 self.sendContractVerdictCNE(verdict,data,contract)
+                continue
+    
+    def getMultisigAddress(self, tx, epk):
+        multisig.escrow_pubkey = epk
+        bpk = tx.getCtrprtyPubkey(tx.buyer)
+        spk = tx.getCtrprtyPubkey(tx.seller)
+        return multisig.createMultisigRaw([epk,bpk,spk])
+        
+
+    def processNewTxRE(self,msg):
+        
+        txHash,sender = msg[0].split('.')
+        txString,buyerSig,sellerSig,escrowSig,btcTxhash = \
+            ':'.join(msg[1].split(':')[1:]).split('|')
+        
+        print txString
+        print buyerSig
+        print sellerSig
+        print btcTxhash
+        
+        #shared.debug(2,["We received a transaction string:",txString])
+        #instantiate the transaction
+        tx = pickle.loads(txString)
+        if tx.uniqID() != txHash:
+            shared.debug(0,["Alert: transaction object passed with inconsistent hash, given",txHash,"should be:",tx.uniqID()])
+            self.sendMessage('RE_CNE_TX_REJECT_RECEIPT:',recipientID=sender,txID=tx.uniqID())
+            return None
+        #initiate the new multisig address for this transaction
+        tx.msigAddr = self.getMultisigAddress(tx,g("Escrow","escrow_pubkey"))
+        
+        #allow us to keep track of where the deposits are (fees also collected here) 
+        tx.depositHash = btcTxhash       
+        
+        #permanent record of identity of CNE
+        tx.CNE = sender
+        
+        #validate the signatures
+        for i,j in zip([buyerSig,sellerSig,escrowSig],[tx.buyer,tx.seller,sender]):
+            testaddress = multisig.pubtoaddr(multisig.ecdsa_recover(tx.contract.getContractTextOrdered(),i))
+            shared.debug(4,["Recovery produced this address:",multisig.pubtoaddr(testaddress)])
+            if not testaddress == j:
+                shared.debug(0,["Alert: this transaction is not correctly signed by",j,"- ignoring"])
+                self.sendMessage('RE_CNE_TX_REJECT_RECEIPT:',recipientID=sender,txID=tx.uniqID())
+                return None
+            else:
+                shared.debug(1,["Correct signature from:",j])
+        
+        #add the transaction to the persistent store
+        #at this point, a valid transaction has been initialised but not funded in any way.
+        self.transactionUpdate(tx=tx,new_state=400)
+        
+        #send back confirmation message (on THIS message queue)
+        self.sendMessage('RE_CNE_TX_CONFIRM_RECEIPT:',recipientID=sender,txID=tx.uniqID())
+   
+   
+    def runRE(self):
+        
+        #transactions that are in temporary wait states on system
+        #startup should re-instantiate their waiting threads
+        self.checkForRestartActions()
+        
+        while True:
+            
+            #all autonomous actions (e.g. checking for deposits)
+            #are done here before getting external instructions
+            self.takeAppropriateActions()
+            
+            msg = self.getSingleMessage(5)
+            
+            if not msg:
+                shared.debug(0,["Got nothing, waiting.."])
+                continue
+            
+            k,m = msg.items()[0]
+            txID, requester = k.split('.')            
+            
+            #special message: instantiating a transaction transfer from the CNE
+            if 'CNE_RE_TRANSFER' in m:
+                self.processNewTxRE([k,m])
+                continue
+            
+            elif 'VERIFICATION_FAILURE' in m:
+                shared.debug(0,["Critical error: the agent didn\'t recognise our signature"])
+                
+            elif 'RE_SELLER_DEPOSIT:' in m:
+                #wait for completion of deposit transfer
+                tx = self.getTxByID(txID)
+                
+                #deal with repeat messages which may occur due to statelessness here
+                if tx.sellerFundingTransactionHash:
+                    if tx.sellerFundingTransactionHash == m.split(':')[1]:
+                        #means we already have this information; ignore it
+                        continue
+                    else:
+                        shared.debug(0,["Serious error - seller claims \
+                        to have deposited into both",tx.sellerFundingTransactionHash,\
+                                                    "and",m.split(':')[1]])
+                                     
+                if tx.state != 500:
+                    shared.debug(0,["Transaction",txID,\
+                                    "is not ready for seller deposit. Doing nothing"])
+                    continue
+                
+                tx.sellerFundingTransactionHash=m.split(':')[1]
+                
+                amts = int(tx.contract.text['mBTC Amount'])
+                checkThread = threading.Thread(\
+                    target=self.checkBalanceWithTimeout,\
+                    args=[tx,60*60,tx.msigAddr,tx.seller,amts,\
+                          501,503,tx.sellerFundingTransactionHash])
+                checkThread.setDaemon(True)
+                checkThread.start()
+                
+            #check: is the request asking for information only?
+            elif 'RE_TRANSACTION_SYNC_REQUEST:' in m:
+                self.sendTransactionSynchronization([k,m])
+                continue            
+            
+            elif 'RE_BANK_SESSION_START_REQUEST:' in m:
+                if self.getTxByID(txID).buyer != requester:
+                    self.sendRejectionMessage(txID,requester,m)
+                self.processBankSessionStartRequest([k,m])
+                continue
+            
+            elif 'RE_BANK_SESSION_START_READY:' in m:
+                if self.getTxByID(txID).seller != requester:
+                    self.sendRejectionMessage(txID,requester,m)
+                    continue
+                self.transactionUpdate(full=False,txID=txID,tx=None,new_state=601)
+                continue
+            
+            elif 'RE_BANK_SESSION_ENDED:' in m:
+                if self.getTxByID(txID).buyer != requester:
+                    self.sendRejectionMessage(txID,requester,m)
+                else:
+                    self.cleanUpBankSession([k,m])
                 continue
             
             ##the message is about a transaction; find it in the db:
@@ -104,14 +241,6 @@ class EscrowAgent(Agent.Agent):
             #elif 'TRANSACTION_ABORT' in m:
                 ##TODO: self.abortTransaction([k,m])
                 #continue
-            
-            #elif 'BANK_SESSION_START_REQUEST' in m:
-                #self.negotiateBankSessionStartRequest([k,m])
-                #continue
-            
-            #elif 'BANK_SESSION_ENDED' in m:
-                #self.cleanUpBankSession([k,m])
-                #continue
                 
             #elif 'DISPUTE_L1_REQUEST' in m:
                 #self.requestSSLHashes([k,m])
@@ -123,30 +252,177 @@ class EscrowAgent(Agent.Agent):
             
             #elif 'DISPUTE_L2_SEND_SSL_KEYS' in m:
                 #self.receiveSSLKeysAndSendHtml([k,m])
-                #continue       
+                #continue      
     
+    
+    def sendRejectionMessage(self,txID,requester,m):
+        self.sendMessage('MESSAGE_REJECTED:'+m,recipientID=requester,txID=txID)
+    
+    def startRandomEscrowChoice(self,txhash):
+        #first upgrade transaction. then notify counterparties.
+        #then take timestamp for 1 or 2 minutes after deposits confirmed.
+        #read from NIST beacon. convert to small rand in range.
+        #message to counterparties and RE of choice.
+        
+        #mark the waypoint time. This time must be *after* the
+        #arrival of both deposits; this is causally guaranteed by the protocol
+        #note that this is not yet perfect TODO - we either change it
+        #or somehow guarantee synchronisation between client and server
+        waypoint = int(time.time())
+        
+        tx = self.getTxByID(txhash)
+        self.transactionUpdate(full=False,txID='',tx=tx,new_state=206)
+        m = 'CNE_RE_CHOICE_STARTED:'+str(waypoint)
+        for recipient in [tx.buyer,tx.seller]:
+            self.sendMessage(m,recipientID=recipient,txID=txhash)
+        
+        #get public random number
+        publicRandomMax=1000000
+        timestamp,publicRandom = shared.get_public_random(publicRandomMax)
+        
+        numEscrows = len(self.escrowList)
+        chosenEscrow = int(math.floor((numEscrows/publicRandomMax)*publicRandom))
+        
+        shared.debug(0,["We chose escrow:",chosenEscrow,"at time:",timestamp])
+        
+        #TODO hack for testing, remove this
+        chosenEscrow=1        
+        
+        #generate multisig address on remote escrow
+        epk = self.escrowList[chosenEscrow]['pubkey']
+        REMultisigAddr = self.getMultisigAddress(tx,epk)
+        shared.debug(0,["Generated multisig was: ", REMultisigAddr])
+               
+        #We include the escrow pubkey in the message so as to confirm
+        #the RE identity in case of some error syncing the escrow table
+        m = 'CNE_RE_CHOSEN:'+'|'.join([self.escrowList[chosenEscrow]['id'],tx.uniqID(),\
+                                       tx.contract.getContractText(),str(epk),REMultisigAddr])
+        for recipient in [tx.buyer,tx.seller]:
+            self.sendMessage(m,recipientID=recipient,txID=tx.uniqID())
+        paidAmount,btcTxhash = self.sendCoinsToRE(txhash,REMultisigAddr)
+        
+        tx.depositHash = btcTxhash
+        tx.chosenRE=chosenEscrow 
+        
+        #update the transaction state
+        self.transactionUpdate(full=False,txID=tx.uniqID(),tx=None,new_state=300)                
+        self.transferTxToRE(tx,chosenEscrow)
+        
+    def transferTxToRE(self,tx,chosenEscrow):
+        #send a message to the chosen escrow
+        #this message contains the full transaction object
+        transaction_string = pickle.dumps(tx)
+        buyerSig = tx.contract.getSignature('buyer')
+        sellerSig = tx.contract.getSignature('seller')
+        txt,escrowSig = multisig.signText(self.uniqID(),tx.contract.getContractTextOrdered())
+        m = 'CNE_RE_TRANSFER:'+'|'.join([transaction_string,buyerSig,\
+                                         sellerSig,escrowSig,tx.depositHash])
+        
+        #TODO: remote connection will need to be setup, for testing on one MQ
+        #Hack for testing: set chosen escrow to the "other"
+        chosenEscrow=1
+        self.sendMessage(m,recipientID=self.escrowList[chosenEscrow]['id'],txID=tx.uniqID())
+        #once transaction is confirmed received, we update its state so as not to send it again
+        msg = self.getSingleMessage(20)
+        a,b = msg.keys()[0].split('.')
+        if not msg or b != self.escrowList[chosenEscrow]['id'] or tx.uniqID() != a:
+            #we didn't receive a response in 20 seconds
+            return False
+        else:
+            if 'RE_CNE_TX_CONFIRM_RECEIPT' in msg.values()[0]:
+                #this is the final state of the transaction on the contract negotiation side
+                self.transactionUpdate(full=False,txID=tx.uniqID(),new_state=301)
+                return True
+            elif 'RE_CNE_TX_REJECT_RECEIPT' in msg.values()[0]:
+                shared.debug(0,["Warning, transaction",tx.uniqID(),"was not accepted by chosen Escrow",self.escrowList[chosenEscrow]['id']])
+                #do nothing here; we need to send again
+                #TODO what kind of rejection? parse "reason" field?
+                return False
+            else:
+                raise Exception("Random escrow sent unrecognised message type")
+            
+        
+    def sendCoinsToRE(self,txhash,REMultisigAddr):
+        #new version 7 Jan: much simpler just send the unspent outputs from
+        #the counterparties directly to the new multisig on the RE
+        print "About to send to:",REMultisigAddr," with txhash:",txhash
+        tx = self.getTxByID(txhash)
+        return multisig.spendUtxos(self.uniqID(),\
+                            self.uniqID(),REMultisigAddr,[tx.buyer,tx.seller])
+        
+        
+        
+    def sendDepositTimeout(self,txid):
+        temptx = self.getTxByID(txid)
+        for r in [temptx.buyer,temptx.seller]:
+            self.sendMessage('CNE_DEPOSIT_TIMEOUT:',recipientID=r,txID=txid)
+        #just delete the transaction; no money has changed hands
+        #TODO: not quite! any amounts paid less than the required have
+        #to be rolled back!
+        #edited 20 Jan; just let the transaction stay in default state 207/208
+        #self.transactionUpdate(full=False,txID=txid,tx=None,new_state='')
+            
+    def processTimeOut(self,tx):
+        #we know that transaction tx ran past its deadline for something
+        #send the cancellation/penalty message to the relevant
+        #counterparties, make payments if necessary and reset tx state
+        
+        if tx.state == 203:
+            for c in [tx.buyer,tx.seller]:
+                self.sendMessage('CNE_DEPOSIT_TIMEDOUT:',recipientID=r,txID=tx.uniqID())
+            #we must also reverse any payments to the senders TODO
+            #now remove the transaction entirely as it has been aborted
+            self.transactionUpdate(full=False,txID=tx.uniqID(),tx=None,new_state='')
+            return
+        #add code for later timeouts here: TODO   
+        elif tx.state:
+            return
+        else:
+            return
+        
     def sendContractVerdictCNE(self,verdict,reason,contract):
         #get the IDs of the two counterparties
         buyer = contract.text['Buyer BTC Address']
         seller = contract.text['Seller BTC Address']
         txid = contract.textHash
-        m = 'CNE_CONTRACT_FAILED:' if not verdict else 'CNE_CONTRACT_SUCCESS:'
+
+        m = 'CNE_CONTRACT_SIG_FAILED:' if not verdict else 'CNE_CONTRACT_SUCCESS:'
+        if verdict:
+            multisig.msd = os.path.join(self.baseDir,"multisig_store")
+            txt,sig = multisig.signText(self.uniqID(),contract.getContractTextOrdered())
+            contract.sign(multisig.pubtoaddr(g("Escrow","escrow_pubkey")),sig)
         for a in [buyer,seller]:
-            k = txid+'.'+self.escrowID
-            m += reason
-            self.sendMessages({k:m},recipientID=a)
+            if not verdict:
+                ma = m+reason
+            else:
+                ma = m+'|'.join([reason,contract.getContractText(),sig])
+            self.sendMessage(ma,recipientID=a,txID=txid)
         #persist a new transaction object if it was accepted
-        self.transactionUpdate(full=False,txID='',tx=Transaction(contract),new_state=203)
-        #set the deadline for deposit
+        if verdict:
+            tx = Transaction(contract)
+            tx.CNEDepositAddr=reason
+            tx.signatureCompletionTime=int(time.time())
+            self.transactionUpdate(full=False,txID='',tx=tx,new_state=203)
+            #set the deadline for deposit
+            #need to start checking the balance; spawn a thread
+            sendingAddresses = [tx.buyer,tx.seller]
+            amts = [tx.contract.getTotalFees('buyer'),tx.contract.getTotalFees('seller')]
+            receivingAddr = self.uniqID()
+            requestedState = 206
+            failedState = 207
+            checkThread = \
+            threading.Thread(target=self.checkBalanceWithTimeout,\
+            args=[tx,60*60,receivingAddr,sendingAddresses,amts,requestedState,failedState])
+            checkThread.daemon=True
+            checkThread.start()            
             
-    #acting as CNE, the escrow can receive a doubly-signed
-    #contract at any time from any party. After verifying
-    #that the signatures are valid, and that the deposits 
-    #are specified correctly in the contract, the multisig address
-    #for deposits are set up and messages sent to both parties
-    #giving them a deadline for deposit.
+    
     def receiveContractCNE(self,msg):
-        
+        '''acting as CNE, the escrow can receive a doubly-signed
+        contract at any time from any party. After verifying that the signatures are valid, and that the deposits 
+        are specified correctly in the contract, the address
+        for deposits is reported and the contract signed for the third time by the escrow.
+        Messages sent to both parties giving them a deadline for deposit. '''       
         sender = msg[0].split('.')[1]
         #this special message is delimited by |
         allContractDetails = ':'.join(msg[1].split(':')[1:]).split('|')
@@ -178,23 +454,87 @@ class EscrowAgent(Agent.Agent):
         verdict,reason = self.checkBusinessRulesCNE(tmpContract)
         if not verdict: return (verdict, reason,tmpContract)
         
+        #removed for now.
         #now we're happy that the contract is valid we build the dep multisig
-        multisig.initialise(g("Escrow","escrow_pubkey"),g("Directories","escrow_base_dir"))
-        for a,p in pubs.iteritems():
-            multisig.store_share(p,a)
-        msigaddr, mscript = multisig.create_multisig_address(*pubs.keys())
-        #both deposits are sent to the same CNEmultisig
-        return (True,msigaddr,tmpContract)     
+        #multisig.initialise(g("Escrow","escrow_pubkey"),g("Directories","escrow_base_dir"))
+        #for a,p in pubs.iteritems():
+            #multisig.store_share(p,a)
+        #msigaddr, mscript = multisig.create_multisig_address(*pubs.keys())
+        
+        return (True,multisig.pubtoaddr(g("Escrow","escrow_pubkey")),tmpContract)     
     
+    def checkBalanceWithTimeout(self,tx,timeout,\
+                                 receivingAddr,sendingAddresses,\
+                                 amts,requestedTxState=None,failedTxState=None,txh=None):
+        '''waits to see new transactions on the blockchain with required
+        payments.
+        If no payment before timeout minutes, or insufficient payments
+        then returns with transaction tx updated to state failedTxState.
+        If txh is specified, we are looking for a specific
+        payment from one payer, with transaction hash txh.
+        In this case 'amts' is actually just one amount to be paid
+        and 'sendingAddresses' is just one sending address.
+        If txh is not specified, we are looking for the amounts
+        listed in amts paid to the receiving address by each sender
+        in sendingAddresses.
+        In case of success, the transaction is updated 
+        to new state requestedTxState (assuming it follows vtst rules)
+        All transaction updates use tdbLock lock for thread safety.
+        '''
+        shared.debug(2,["Starting a balance checking thread with these parameters:",\
+                        "receiving address:",receivingAddr,\
+                        "sending addrfess:",sendingAddresses,\
+                        "amts:",amts,\
+                        "requested state:",requestedTxState,\
+                        "failed state:",failedTxState,\
+                        "tx hash:",txh])
+        
+        startTime = int(time.time())
+        while True:
+            time.sleep(8)
+            if startTime+timeout<int(time.time()):
+                self.transactionUpdate(tx=tx,new_state=failedTxState)
+                return  
+            else:
+                if not txh:
+                    utxos=[]
+                    for s in sendingAddresses:
+                        u,t = multisig.getUtxos(receivingAddr,s)
+                        utxos.append([u,t])
+                    flag=True
+                    for i,amt in enumerate(amts):
+                        if amt > utxos[i][1]:
+                            flag=False
+                    if flag:
+                        self.transactionUpdate(tx=tx,new_state=requestedTxState)
+                        return 
+                else:
+                    u,t = multisig.getUtxos(receivingAddr,sendingAddresses)
+                    if t==0:
+                        continue
+                    for x in u:
+                        if x['output'].split(':')[0] == txh:
+                            if amts > x['value']:
+                                shared.debug(0,\
+                                ["Claimed amount spent in transaction:",txh,\
+                                 "was not sufficient. Was:",x['value'],"should be:",amts])
+                                #TODO: partial payment total rewind?
+                                self.transactionUpdate(tx=tx,new_state=failedTxState)
+                                return
+                            else:
+                                self.transactionUpdate(tx=tx,new_state=requestedTxState)
+                                return
+                                
+                        
     #are the monetary amounts valid?
     def checkBusinessRulesCNE(self,contract):
         #all fees parse from btc amount, fiat is ignored
-        btc = int(contract.text['mBTC Amount'])
-        bd = int(contract.text['Buyer Deposit Fee'])
-        sd = int(contract.text['Seller Deposit Fee'])
-        bf = int(contract.text['Buyer Escrow Fee'])
-        sf = int(contract.text['Seller Escrow Fee'])
-        req_dep = int(g("Escrow","escrow_CNE_deposit"))
+        btc = float(contract.text['mBTC Amount'])
+        bd = float(contract.text['Buyer Deposit Fee'])
+        sd = float(contract.text['Seller Deposit Fee'])
+        bf = float(contract.text['Buyer Escrow Fee'])
+        sf = float(contract.text['Seller Escrow Fee'])
+        req_dep = float(g("Escrow","escrow_CNE_deposit"))
         req_txfp = float(g("Escrow","escrow_tx_fee_percent"))
         
         #check the deposit fee
@@ -207,48 +547,71 @@ class EscrowAgent(Agent.Agent):
         
         return (True, 'All fees are valid, contract accepted.')
     
-    def takeAppropriateActions(self):
-        pass
-        #for t in self.transactions:
-            #if t.state==703:
-                #self.adjudicateL1Dispute(t)
-            #elif t.state==501:
-                #t.state=300
-            #elif t.state==706:
-                #t.state=800
+    def checkForRestartActions(self):
+        
+        for t in self.transactions:
+            #little hack for bank session testing
+            if t.state in [600,601,602]:
+                self.transactionUpdate(tx=t,new_state=501)            
+            #TODO are we sure we want to do this?
+            if t.state==402:
+                self.transactionUpdate(tx=t,new_state=400)
                 
-            ##TODO absolutely not for prod! This is just to help
-            ##debugging L2; always allow ssl key resending
-            #elif t.state==801 or t.state==802:
-                #t.state=800
+    def takeAppropriateActions(self):
         
-        #self.transactionUpdate(full=True)
+        for t in self.transactions:
+                
+            if t.state==400:
+                amts=t.contract.getTotalFees('buyer')+t.contract.getTotalFees('seller')
+                self.transactionUpdate(tx=t,new_state=402)
+                checkThread = threading.Thread(\
+                    target=self.checkBalanceWithTimeout,\
+                    args=[t,60*60,t.msigAddr,t.CNE,amts,500,401,t.depositHash])
+                checkThread.daemon=True
+                checkThread.start()            
+                
+            elif t.state==300:
+                #transaction is ready to be propagated to RE:
+                #TODO Hacked for testing - chosenEscrow will be a transaction property
+                if not self.transferTxToRE(t,chosenEscrow=1):
+                    shared.debug(0,["Warning, transfer of ",\
+                                    t.uniqID(),"to random escrow was unsuccessful"])
+            
+            elif t.state==206:
+                self.startRandomEscrowChoice(t.uniqID())
+            
+            elif t.state==207:
+                self.sendDepositTimeout(t.uniqID())
+                
+            elif t.state==501:
+                shared.debug(0,["Success! Ready for banking"])
         
-    #def cleanUpBankSession(self,msg):
-        ##shut down the stcppipe for this run
-        ##TODO - this is obviously incompatible with multiple sessions
-        ##TODO: this creates a zombie - does it matter?
-        #shared.local_command(['pkill', '-SIGTERM', 'stcppipe'])
-        #requested_state=int(msg[1].split(':')[1].split(',')[0])
-        #tx = self.getTxByID(msg[0].split('.')[0])
-        ##note that the requester will have encoded success/failure
-        ##in his requested state
-        #self.transactionUpdate(tx=tx,new_state=requested_state)
-        ##inform the seller
-        #self.sendMessages({tx.uniqID()+'.'+\
-        #tx.seller:'BANK_SESSION_ENDED:'+str(requested_state)},recipientID=tx.seller)
+        self.transactionUpdate(full=True)
         
-    #def sendTransactionSynchronization(self,msg):
-        #requester = msg[0].split('.')[1]
-        #shared.debug(0,["Requester:",requester])
-        #smsg_key = '0.'+self.escrowID
-        #for tx in self.transactions:
-            #if requester == tx.buyer or requester == tx.seller:
-                ##build message:
-                #smsg = {smsg_key:'TRANSACTION_SYNC_RESPONSE:'+pickle.dumps(tx)}
-                #self.sendMessages(smsg,requester)
-        ##send a final message to mark end of list
-        #self.sendMessages({smsg_key:'TRANSACTION_SYNC_COMPLETE:'},requester)
+        
+    def cleanUpBankSession(self,msg):
+        #shut down the stcppipe for this run
+        self.stcppipe_proc.kill()
+        
+        rspns=msg[1].split(':')[1].split(',')[0]
+        requested_state = 602 if rspns=='y' else 603
+        tx = self.getTxByID(msg[0].split('.')[0])
+        
+        self.transactionUpdate(tx=tx,new_state=requested_state)
+        #inform the seller
+        self.sendMessage('RE_BANK_SESSION_ENDED:'+rspns,\
+                         recipientID=tx.seller,txID=tx.uniqID())
+        
+    def sendTransactionSynchronization(self,msg):
+        requester = msg[0].split('.')[1]
+        shared.debug(0,["Requester:",requester])
+        smsg_key = '0.'+self.uniqID()
+        for tx in self.transactions:
+            if requester == tx.buyer or requester == tx.seller:
+                self.sendMessage('RE_TRANSACTION_SYNC_RESPONSE:'\
+                                 +pickle.dumps(tx),recipientID=requester,txID=tx.uniqID())
+        #send a final message to mark end of list
+        self.sendMessage('RE_TRANSACTION_SYNC_COMPLETE:',recipientID=requester,txID=tx.uniqID())
         
     ##for this function we use "instruction" rather than
     ##"request" because users should be able to cancel WITHOUT
@@ -380,62 +743,46 @@ class EscrowAgent(Agent.Agent):
             #self.transactions.append(tmptx)
             #self.transactionUpdate(full=True)
             
-            
-          
-        
-    ##this is called, i.e. initiated, by buyer only, but
-    ##we need to send a message to seller to check squid+ssllog is running,
-    ##and to start their stcppipe. So a reject can be sent back to the buyer
-    ##if that doesn't work. The main point is that the seller should not need
-    ##to perform user input, only to have ssllog running.         
-    #def negotiateBankSessionStartRequest(self,request):
-        #response=[]
-        
-        ##ID of requesting agent is after the .
-        #requester = request[0].split('.')[1]
-        
-        #tx = self.getTxByID(request[0].split('.')[0])
-        
-        ##first step is to ask the seller to confirm readiness
-        #self.sendMessages({tx.uniqID()+'.'+tx.seller:\
-                #'BANK_SESSION_START_REQUEST:'+str(tx.state)},\
-                          #recipientID=tx.seller)
-        ##wait for response; likelihood of no response is high!
-        #msg = self.getSingleMessage(200)
-        #if not msg:
-            #response = ['reject','seller is not responding']
-        #elif 'BANK_SESSION_READY' not in msg.values()[0]:
-            #response=['reject','seller did not respond to request to start banking']
-        #else:
-            #response = ['accept']
-            
-        #if response[0]=='reject':
-            #message={tx.uniqID()+'.'+self.escrowID:'BANK_SESSION_START_REJECTED:'\
-                     #+str(tx.state)+','+response[1]}
-            ##send rejection to both parties involved
-            #for recipientID in [buyerID,sellerID]:
-                #self.sendMessages(message,recipientID)
-            #return False
-        
-        ##seller is ready if we got here
                     
-        #self.transactionUpdate(tx=tx,new_state=500)
+    def processBankSessionStartRequest(self,request):
+        '''In response to buyer's request, update the transaction
+        state and set up the ssh/stcp pipe for the proxying'''
         
-        ##TODO: killing pre-existing pipes here is only valid
-        ##for one-session-at-a-time model; OK for now
-        #shared.local_command(['pkill','-SIGTERM','stcppipe'],bg=True)
-        ##time.sleep(2)
-        ##prepare file storage on escrow for logs, start stcppipe
-        #runID='_'.join(['escrow',tx.uniqID(),'banksession'])
-        #d = shared.makedir([g("Directories","escrow_base_dir"),runID])
-        #stcpd = shared.makedir([d,'stcplog'])
-        #shared.local_command([g("Exepaths","stcppipe_exepath"),'-d',\
-        #stcpd, '-b','127.0.0.1', g("Escrow","escrow_stcp_port"),\
-        #g("Escrow","escrow_input_port")],bg=True)
-        #message = {tx.uniqID()+'.'+self.escrowID:'BANK_SESSION_START_ACCEPTED:'\
-                   #+str(tx.state)}
-        ##send acceptance to buyer
-        #self.sendMessages(message,tx.buyer)
+        #ID of requesting agent is after the .
+        requester = request[0].split('.')[1]
+        
+        tx = self.getTxByID(request[0].split('.')[0])
+        
+        self.transactionUpdate(full=False,tx=tx,new_state=600)
+        
+        #next need to request the session to the seller
+        self.sendMessage('RE_BANK_SESSION_START_REQUEST:', recipientID=tx.seller, txID=tx.uniqID())
+        #we'll block here, but not for long as after all we're checking availability!
+        msg = self.getSingleMessage(timeout=5)
+        if not msg or 'RE_BANK_SESSION_START_ACCEPTED' not in msg.values()[0]:
+            self.sendMessage('RE_BANK_SESSION_START_REJECTED:seller unavailable',\
+                             recipientID=tx.buyer, txID=tx.uniqID())
+        
+        else:
+            self.transactionUpdate(full=False, tx=tx, new_state=601)
+            #seller is ready; set up pipes and then let buyer know
+            
+            #TODO how to make sure we start clean (no old stcppipe procs)?
+            if self.stcppipe_proc:
+                self.stcppipe_proc.kill()
+            #time.sleep(2)
+            #prepare file storage on escrow for logs, start stcppipe
+            runID='_'.join(['escrow',tx.uniqID(),'banksession'])
+            d = shared.makedir([g("Directories","escrow_base_dir"),runID])
+            stcpd = shared.makedir([d,'stcplog'])
+            self.stcppipe_proc=shared.local_command(\
+                [g("Exepaths","stcppipe_exepath"),'-d',stcpd, '-b','127.0.0.1',\
+                 g("Escrow","escrow_stcp_port"),g("Escrow","escrow_input_port")],bg=True)
+            
+            self.sendMessage('RE_BANK_SESSION_START_ACCEPTED:', \
+                             recipientID=tx.buyer,txID=tx.uniqID())
+            
+         
         
     ##request ssl hashes from counterparties, wait for a return
     ##and check against escrow's own record. Adjudicate on that basis.
@@ -586,25 +933,10 @@ class EscrowAgent(Agent.Agent):
         #shared.debug(0,["Mismatches between seller and escrow:", \
         #set(my_hash_list).symmetric_difference(set(seller_hash_list))]) 
                
-#========MESSAGING FUNCTIONS======================                
-    def sendMessages(self,messages={},recipientID='',transaction=None):
-        recipientID = self.uniqID if recipientID == '' else recipientID
-        
-        #this standardised way will work if we have only one message
-        if transaction:
-            messages={transaction.uniqID()+'.'+self.uniqID():messages.values()[0]}
-        
-        shared.debug(0,["About to send a message to",recipientID])
-        return Msg.sendMessages(messages,recipientID=recipientID)
-    
-    def getSingleMessage(self,timeout=1):
-        return Msg.getSingleMessage(self.escrowID,timeout)
-    
     
     def providePort(self):
         #TODOcode to provide a currently unused port for concurrent transactions
         #this seems like it could be tricky
         #for now, static
         return g("Escrow","escrow_input_port")
-
     

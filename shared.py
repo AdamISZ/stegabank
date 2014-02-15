@@ -5,6 +5,8 @@ import time
 import errno
 import inspect
 import platform
+import urllib2
+from xml.dom import minidom
 import ConfigParser
 import subprocess
 import re
@@ -17,6 +19,7 @@ config = ConfigParser.ConfigParser()
 OS = platform.system()
 PINL = '\r\n' if OS == 'Windows' else '\n'
 hexdigits = set('0123456789abcdefABCDEF')
+defaultBtcTxFee=10000
 #controller of transaction state transitions (v=valid)
 #the value of encoding this is that we can greate a generic call
 #to validate whether messages coming into the escrow are asking for something
@@ -28,6 +31,41 @@ vtst={100:[],200:[201,202,300,400],201:[300,400],202:[300,400],300:[400,500],400
       705:[],706:[800],800:[801,804],801:[802],802:[803,804],803:[],804:[]}
 #====END GLOBALS==============
 
+
+def get_public_random(maxRand):
+    '''This function promises to deliver a random number
+    produced at a given time *after* the given Unix style 
+    timestamp, and deliver it in integer form. It will
+    return within a period of 2 minutes maximum. 
+    The random number will be chosen from a range as
+    given in maxRand.
+    The random number produced will be based on a public
+    fact verifiable by anyone.
+    
+    The result may or may not have a timestamp
+    associated with it. 
+    
+    The return values are 
+    (timestamp,publicrandom)'''
+    
+    #NIST provides a 512 bit public random "beacon" every 60 seconds
+    #; see http://www.nist.gov/itl/csd/ct/nist_beacon.cfm for a description
+    beaconUrl = urllib2.urlopen('https://beacon.nist.gov/rest/record/last')
+    beaconXml = beaconUrl.read()
+    beaconDom = minidom.parseString(beaconXml)
+    
+    output = beaconDom.getElementsByTagName('outputValue')[0].firstChild.data
+    timeStamp = beaconDom.getElementsByTagName('timeStamp')[0].firstChild.data
+    #debug(0,["Output value was:",output])
+    print "We see this time:",str(int(time.time()))
+    print "Output value was",output
+    print "Timestamp was",timeStamp
+    randInt = int(output,16)
+    print "random integer was: ",str(randInt)
+    #was automatically cast to long, cast back to int
+    randRestricted = int(randInt % maxRand)
+    print "restricted was: ", randRestricted
+    return (timeStamp,randRestricted)
 
 #v. simple, just give me that directory whether it exists yet or not!
 def makedir(dirlist):
@@ -153,16 +191,16 @@ def debug(level,message):
         ': ',' '.join(str(x) for x in message)
 
 def get_binary_user_input(query,option1,result1,option2,result2):
-     while True:
-            answer = raw_input(query).strip()
-            if (answer in [option1,option1.upper()]):
-                return result1
-            elif (answer not in [option2,option2.upper()]):
-                print "Unrecognized input. Please enter "+\
+    while True:
+        answer = raw_input(query).strip()
+        if (answer in [option1,option1.upper()]):
+            return result1
+        elif (answer not in [option2,option2.upper()]):
+            print "Unrecognized input. Please enter "+\
                     '/'.join([option1,option1.upper(),option2,option2.upper()]) \
                 + " (one character)"
-            else:
-                return result2
+        else:
+            return result2
 
 #generic input validator; idea is to check whether the input is valid
 #for the particular data type requested, which is set in the parameter cls
@@ -191,15 +229,14 @@ def make_separate_files(file_in,filter,subdirectory):
         print>>fh, line
         fh.close()
         
-#this function checks if a file already exists, and either confirms
-#overwriting or changes the filename to be used as appropriate
-#if creating a new file, it will be in the same directory
-#This is the usual functionality.
-#In some unusual cases (e.g. mergecap) it's essential to remove the
-#previously existing file, otherwise processing cannot continue.
-#This is the purpose of the remove_in_advance flag.
 def verify_file_creation(file,warning,overwrite=False,prompt=True,remove_in_advance=False):
-    
+    '''this function checks if a file already exists, and either confirms
+    overwriting or changes the filename to be used as appropriate
+    if creating a new file, it will be in the same directory
+    This is the usual functionality.
+    In some unusual cases (e.g. mergecap) it's essential to remove the
+    previously existing file, otherwise processing cannot continue.
+    This is the purpose of the remove_in_advance flag. '''   
     try:
         while True:
             if (os.path.isfile(file)):

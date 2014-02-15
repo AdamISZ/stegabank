@@ -16,6 +16,7 @@
 #=====LIBRARY IMPORTS===============
 import sys
 import random
+import pickle
 import subprocess
 import shutil
 import os
@@ -51,22 +52,13 @@ import Messaging
 #*interface* from the client app in the browser
 #to the underlying application layer
 
-#set of contracts proposed by *possible* counterparties
-pendingContracts = {}
+myself=None
 
-#the contract we're currently working on
-workingContract = None
+#if on RE, we focus on one transaction at a time
+txRE = None
 
-#control thread access to the the contract list
-contractLock = threading.Lock()
-
-#temporary storage queue for messages
-#passed from back-end to front-end
-qFrontEnd = Queue.Queue()
-myBtcAddress = None
-
-ddir = None
-
+#TODO use ini file to set executable paths
+'''
 if shared.OS=='win':
     stcppipe_exepath = os.path.join(ddir,'stcppipe', 'stcppipe.exe')
     tshark_exepath = os.path.join(ddir,'wireshark', 'tshark.exe')
@@ -79,7 +71,7 @@ if shared.OS=='linux':
     
 firefox_exepath = 'firefox'
 ssh_exepath = 'ssh'
-
+'''
 #local port for ssh's port forwarding. Will be randomly chosen upon starting the tunnel
 random_ssh_port = 0
 #random TCP port on which firefox extension communicates with python backend
@@ -249,185 +241,48 @@ def start_minihttp_thread(parentthread):
     
 #this basically just consists of asking the
 #escrow if the counterparty is currently online
-def initiateChatWithCtrprty(ctrprty):
-    msg = {'0.'+myBtcAddress:'QUERY_STATUS:'+ctrprty}    
-    Msg.sendMessages(msg,escrow)
-    rspns = Msg.getSingleMessage(myBtcAddress,timeout=5)
+def initiateChatWithCtrprty(myself,ctrprty):
+    msg = 'QUERY_STATUS:'+ctrprty    
+    myself.sendMessage(msg)
+    rspns = myself.getSingleMessage(timeout=5)
     for k,v in rspns.iteritems():
         if 'ONLINE' in m:
             return True
     return False
 
-def sendChatToCtrprty(ctrprty,msgToSend,tx=None):
+def sendChatToCtrprty(myself,ctrprty,msgToSend,txID=None):
     #tx will be set after contracts signed
-    if not tx:
-        tx='0'
-    msg = {tx+'.'+myBtcAddress:'CNE_CHAT:'+msgToSend}
-    Msg.sendMessages(msg,ctrprty)
+    myself.sendMessage('CNE_CHAT:'+msgToSend,recipientID=ctrprty,txID=txID)
 
-def sendCtrprtyAliveRequest(ctrprty,escrow):
-    msg = {'0.'+myBtcAddress:'QUERY_STATUS:'+ctrprty}
-    Msg.sendMessages(msg,escrow)
+def sendCtrprtyAliveRequest(myself,ctrprty):
+    msg = {'0.'+myself.uniqID():'QUERY_STATUS:'+ctrprty}
+    sendMessage('QUERY_STATUS:'+ctrprty)        
 
-#'contractDetails' will be a dict
-#passed in from the client interface
-#a False return indicates you tried to sign a contract
-#which didn't match the one sent by your counterparty
-def signContractCNE():
+def changeEscrow():
+    shared.debug(0,["Current escrow:",g("Escrow","escrow_id")])
     
-    global workingContract
+    #escrowList = zip(*(iter(g("Escrow","escrow_list").split('|')),)*3)
+    escrowList = [e.split('|') for e in g("Escrow","escrow_list").split(',')]
     
-    if not workingContract:
-        shared.debug(0,["Error: contract not defined."])  
-        return False
-    if not myBtcAddress:
-        shared.debug(0,["Error: identity not defined."])
+    for i,e in enumerate(escrowList):
+        print "["+str(i+1)+"] "+e[0]    
+    c = shared.get_validated_input("Choose an escrow",int)
+    if c not in range(1,len(escrowList)+1):
+        print "Invalid choice"
+    else:
+        #rewrite the settings file and reset the escrow
+        shared.config.set("Escrow","escrow_id",value=escrowList[c-1][0])
+        shared.debug(2,["Set the escrow id to:",g("Escrow","escrow_id")])
         
-    dummy,sig = multisig.signText(myBtcAddress,workingContract.getContractTextOrdered())
-    print "\n Here is the signature we made: \n",sig,"\n"
-    contractLock.acquire()
-    try:
-        workingContract.sign(myBtcAddress,sig)
-    finally:
-        contractLock.release()
-    
-    return True
-
-#When receiving a contract, first check it's signed and
-#throw it out if not. Otherwise, store it in the list of contracts 
-#that have been proposed by possible counterparties
-#We can choose to accept at anytime, within the process/session.
-#However we will not persist contract 'suggestions' across sessions.
-def receiveContractCNE(msg):
-    global myBtcAddress,workingContract,pendingContracts
-    
-    if not myBtcAddress:
-        #shouldn't get here; if we haven't set an identity
-        #then we won't report as "ONLINE".        
-        shared.debug(0,["Ignored received contract since we haven't got an identity"])
-        return 'Cannot receive contract without identity'
-    
-    allContractDetails = ':'.join(msg.split(':')[1:]).split('|')
-    contractDetails = allContractDetails[0]
-    #the contract is in json; need to change it to a Contract object
-    contractDetailsDict = json.loads(contractDetails)
-    tmpContract = Contract.Contract(contractDetailsDict)
-    
-    ca = getCounterparty(tmpContract)
-    if not ca:
-        return 'Contract invalid: does not contain this identity'
-    
-    for s in allContractDetails[1:]:
-        ad = multisig.pubtoaddr(multisig.ecdsa_recover(tmpContract.getContractTextOrdered(),s))
-        shared.debug(2,["\n recovery produced this address: ",ad,"\n"])
-        tmpContract.signatures[ad]=s
-    
-    #now the temporary contract object is fully populated; 
-    #we can check the signatures match the IDs in the contract
-    for k,v in tmpContract.signatures.iteritems():
-        if k not in [tmpContract.text['Buyer BTC Address'],tmpContract.text['Seller BTC Address']]:
-            shared.debug(1,['Error: signature',v,'from',k,'was invalid'])
-            return 'Invalid contract signature'
-    
-    contractLock.acquire()
-    try:
-        #note that this represents an override for
-        #repeated sending of contracts; one cp can only
-        #be suggesting one contract at a time
-        pendingContracts[ca] = tmpContract
-    finally:
-        contractLock.release()
-    #if the contract is already signed by me AND ctrprty, send it to escrow
-    if len(tmpContract.signatures.keys())>1:
-        contractLock.acquire()
-        try:
-            workingContract = tmpContract
-            #wipe the pending contract list; we are only
-            #interested in the live contract now
-            pendingContracts = {}
-        finally:
-            contractLock.release()
-        
-    return 'Signed contract successfully received from counterparty: '+ca
-
-def getCounterparty(contract):
-    buyer,seller = [contract.text['Buyer BTC Address'],contract.text['Seller BTC Address']]
-    if myBtcAddress not in [buyer,seller]:
-        shared.debug(1,["Error, this contract does not contain us"])
-        return None
-    ca = buyer if seller==myBtcAddress else seller 
-    return ca
-
-#send a json dump of the contract contents
-#also send to the chosen escrow if both parties signed
-def sendSignedContractToCtrprtyCNE():
-    #don't even try if we don't have a working identity
-    if not myBtcAddress:
-        return False
-    #should already be initialised and signed
-    if not workingContract.isSigned:
-        return False
-    #identify the counterparty
-    msg_details = [workingContract.getContractText()]
-    msg_details.extend([v for k,v in workingContract.signatures.iteritems()])
-    msg = {workingContract.textHash+'.'+myBtcAddress:'CNE_SIGNED_CONTRACT:'+\
-           '|'.join(msg_details)}
-    shared.debug(0,["sending message:",msg])
-    if len(workingContract.signatures.keys())>1:
-        shared.debug(0,["\n **Sending a complete contract to the escrow**\n"])
-        persistContract(workingContract)
-        Msg.sendMessages(msg,g("Escrow","escrow_id")) 
-    Msg.sendMessages(msg,getCounterparty(workingContract))
-    return True
-
-def persistContract(contract):
-    shared.makedir([g("Directories","agent_base_dir"),"contracts"])
-    with open(os.path.join(g("Directories","agent_base_dir"),\
-                           "contracts",contract.textHash+'.contract'),'w') as fi:
-        fi.write(contract.getContractTextOrdered())
-        for k,v in contract.signatures.iteritems():
-            fi.write(shared.PINL)
-            fi.write("Signer: "+k)
-            fi.write(shared.PINL)
-            fi.write("Signature: "+v)
-        
-    
-#messages coming from the "back end"
-#(escrow MQ server) will either be processed
-#directly by Python or sent to the front end
-#for display
-#MQ syntax will be isolated here
-def processInboundMessages(parentThread):
-    #infinite loop for getting messages
-    while True:
-        time.sleep(1)
-        if not myBtcAddress:
-            continue
-        msg = Msg.getSingleMessage(myBtcAddress)
-        if not msg:
-            continue
-        for t,m in msg.iteritems():
-            if 'CNE_SIGNED_CONTRACT' in m:
-                response = receiveContractCNE(m)
-                #let the front end know we got it etc.
-                qFrontEnd.put('CONTRACT RECEIVED:'+response)
-                
-            elif 'CNE_CHAT' in m:
-                qFrontEnd.put('CHAT RECEIVED:'+t.split('.')[1]+':'+':'.join(m.split(':')[1:]))
-            
-            elif 'QUERY_STATUS_RESPONSE' in m:
-                #status is online or offline (counterparty was specified in request)
-                qFrontEnd.put('QUERY_STATUS_RESPONSE:'+m.split(':')[1])
-                
-                
-                
 if __name__ == "__main__":
     #first connect to CNE
     #code for reading order books and choosing escrow here?
-    
+    myBtcAddress=None
+    myself = None
+    receiverThread=None
     #Load all necessary configurations:
     helper_startup.loadconfig(sys.argv[1])    
-    global myBtcAddress
+    global txRE
     myEscrow = g("Escrow","escrow_id")
     d = os.path.join(g("Directories","agent_base_dir"),"multisig_store")
     p = g("Escrow","escrow_pubkey")
@@ -436,16 +291,11 @@ if __name__ == "__main__":
     #need a connection to an escrow to do anything
     Msg.instantiateConnection()
     
-    #for responding to messages from the escrow MQ server
-    receiverThread = ThreadWithRetval(target= processInboundMessages)
-    receiverThread.daemon = True
-    receiverThread.start()  
-    
-    FF_to_backend_port = random.randint(1025,65535)
-    FF_proxy_port = random.randint(1025,65535)
-    thread = ThreadWithRetval(target= start_minihttp_thread)
-    thread.daemon = True
-    thread.start()  
+    #FF_to_backend_port = random.randint(1025,65535)
+    #FF_proxy_port = random.randint(1025,65535)
+    #thread = ThreadWithRetval(target= start_minihttp_thread)
+    #thread.daemon = True
+    #thread.start()  
     
     #read in contract details (for early testing only)
     contractDetails = {}
@@ -456,126 +306,248 @@ if __name__ == "__main__":
                 k,v = line[3:].strip().split(':: ')
                 contractDetails[k]=v
     
-    workingContract = Contract.Contract(contractDetails)
+    boilerplateContract = Contract.Contract(contractDetails)
+    
+    #flag to control which menu to use for contacting which type of escrow
+    #TODO: actual connection switching; could still use EscrowAccessor concept?
+    RE = False
     
     while True:
-        if (myBtcAddress):
-            print "****WORKING ON IDENTITY: "+myBtcAddress
-            c,u = multisig.get_balance_lspnr(myBtcAddress)
+        if (myself):
+            print "****WORKING ON IDENTITY: "+myself.uniqID()
+            c,u = multisig.get_balance_lspnr(myself.uniqID())
             print "Current balance in this identity: confirmed: "+str(c)+", unconfirmed: "+str(u)
             print "******************************************************"
-        try:
-            shared.debug(0,["Earlier, received this from MQ:",qFrontEnd.get_nowait()])
-        except:
-            #necessary because empty queue raises Exception
-            pass
-        
-        print """Please choose an option:
-        [1] Send signed contract to counterparty
-        [2] Send chat message
-        [3] Exit
-        [4] Check if counterparty is online
-        [5] Space available
-        [6] Space available
-        [7] Show available pending contracts
-        [8] Create or choose id
-        [9] Modify and set the working contract
-        [10] Purge old messages
-        """
-        choice = shared.get_validated_input("Enter an integer:",int)
-        if choice==1:
-            if not signContractCNE():
-                print "something went wrong signing"
-            if not sendSignedContractToCtrprtyCNE():
-                print "you attempted to send an unsigned contract"
-        elif choice == 2:
-            text = shared.get_validated_input("Enter chat message:",str)
-            sendChatToCtrprty(ctrprty,text)
+            try:
+                #primitive implementation of display to user
+                shared.debug(0,["Earlier, received this from MQ:",myself.qFrontEnd.get_nowait()])
+            except:
+                #necessary because empty queue raises Exception
+                pass
+        if RE:
+            print """You are on RE. Please choose an option:
+            [1] Show current transactions and choose one 
+            [2] Pay mBTC to be transferred into multisig
+            [3] Request banking session as buyer
+            [4] Start firefox and do banking
+            [5] Confirm receipt of funds
+            [6] Exit
+            """
             
-        elif choice == 3:
-            exit(0)
-            
-        elif choice == 4:
-            if not ctrprty:
-                print "You have to set the counterparty first!\n"
-                continue
-            sendCtrprtyAliveRequest(ctrprty,myEscrow)
-            
-        
-        elif choice == 5:
-            c = shared.get_binary_user_input("B/S","b","b","s","s")
-            if c == 'b':
-                ctrprty = contractDetails['Seller BTC Address']
-            else:
-                ctrprty = contractDetails['Buyer BTC Address']
+            choice = shared.get_validated_input("Enter an integer:",int)
+            if choice==1:
+                if not myself.synchronizeTransactions():
+                    shared.debug(0,["Error synchronizing transactions"])                              
+                tnum = shared.get_validated_input("Choose a transaction:",int)
+                print "got ",str(tnum)
+                if tnum not in range(0,len(myself.transactions)):
+                    shared.debug(0,["Invalid choice"])
+                    continue
+                txRE = tnum
+                print "set txre to",str(txRE)
                 
-        elif choice==6:
-            print "Current contract hash:",workingContract.textHash
-            print "Current contract details:",workingContract.getContractText()
-            print "Current contract signatures:",workingContract.signatures
-            
-        elif choice==7:
-            if not pendingContracts:
-                print "No contracts are currently proposed."
-                continue
-            else:
-                print "Counterparty \t Amount"
-                print "**********************"
-                for k,v in pendingContracts.iteritems():
-                    print "["+k[:5]+"..] \t"+v.text['mBTC Amount']
-                cchoice = shared.get_validated_input("Choose a counterparty identified by 5 characters:",str)
-                for x in pendingContracts.keys():
-                    if x.startswith(cchoice):
-                        contractLock.acquire()
-                        try:
-                            workingContract = pendingContracts[x]
-                            print "Contract chosen: " + x
-                        finally:
-                            contractLock.release()
+            elif choice == 2:
+                if not txRE:
+                    shared.debug(0,["Error: you must choose a transaction to perform this action"])
+                    continue
+                if not myself.transactions[txRE].seller == myself.uniqID():
+                    shared.debug(0,["Error: this action is to be performed by the seller,"\
+                                    ,myself.transactions[txRE].seller])
+                    continue
+                
+                if not myself.transactions[txRE].sellerFundingTransactionHash:
+                    amt = int(myself.transactions[txRE].contract.text['mBTC Amount'])
+                    payee = myself.transactions[txRE].msigAddr
+                    sellerDepositHash = multisig.spendUtxos(myself.uniqID(),myself.uniqID(),\
+                                                            payee,None,amt=amt)
+                
+                    if not sellerDepositHash:
+                        shared.debug(0,["Error; insufficient funds in",\
+                                        myself.uniqID(),"for the deposit of",\
+                                        str(amt),"satoshis."])
+                        continue
+                    else:
+                        shared.debug(0,["Deposit successfully made into transaction:",\
+                                        sellerDepositHash])
+                        myself.transactions[txRE].sellerFundingTransactionHash=\
+                            sellerDepositHash
+                
+                else:
+                    sellerDepositHash = myself.transactions[txRE].sellerFundingTransactionHash
+                    
+                #message the RE to inform of payment
+                myself.sendMessage("RE_SELLER_DEPOSIT:"+sellerDepositHash,\
+                                   txID=myself.transactions[txRE].uniqID())
+                
+            elif choice==3:
+                if txRE is None:
+                    shared.debug(0,["Error, you must define the transaction first"])
+                    continue
+                
+                if not myself.getTxByIndex(txRE).getRole(myself.uniqID())=='buyer':
+                    shared.debug(0,["Error, only the buyer can start banking"])
+                    continue
+                
+                if not myself.synchronizeTransactions():
+                                    shared.debug(0,["Error synchronizing transactions"])                
+                
+                myself.sendMessage("RE_BANK_SESSION_START_REQUEST:",\
+                                   txID=myself.transactions[txRE].uniqID())
+                #wait for bank session start accceptance message, 
+                #handled by processInboundMessages, and block 
+                while True:
+                    #wait for response; we don't expect a long wait as it's a low
+                    #intensity workload for escrow
+                    msg=None
+                    try:
+                        msg = myself.qFrontEnd.get_nowait()
+                    except:
+                        pass #in case queue is empty
+                    
+                    shared.debug(4,["Got",msg])
+                    if not msg:
+                        #we stay here since we insist on getting a response.
+                        time.sleep(1)
+                        shared.debug(4,["Waiting for escrow response.."])
+                        #TODO need some failure mode here
+                        continue                
+                    
+                    hdr,data = msg.values()[0].split(':')[0],':'.join(msg.values()[0].split(':')[1:])
+                    shared.debug(4,["Got this message:",hdr,data])
+                    
+                    if hdr == 'RE_BANK_SESSION_START_REJECTED':
+                        shared.debug(0,["Seller is not available, cannot proceed"])
                         break
+                    elif hdr != 'RE_BANK_SESSION_START_ACCEPTED':
+                        shared.debug(0,["The message server sent a wrong message in the"\
+                                                    "stream of transaction data."])
+                        break
+                    else:
+                        rspns = myself.startBankingSession(myself.getTxByIndex(txRE))
+                        myself.endBankingSession(myself.getTxByIndex(txRE), rspns)
+                        break
+                        
+            elif choice==4:
+                myself.doBankingSession(txRE)
                 
-        elif choice==8:
-            listIds = [f for f in os.listdir(multisig.msd) if os.path.isfile(os.path.join(multisig.msd,f)) and f.endswith('.private')]
-            dictIds = {}
-            for i,fname in enumerate(listIds):
-                #if not fname.endswith('.private'):
-                    #continue
-                print "["+str(i+1)+"] "+fname[:-8]
-                dictIds[i+1]=fname[:-8]
-            c = shared.get_validated_input("Choose an identity or 0 for a new one",int)
-            if c==0:
-                addr,pub,priv = multisig.create_tmp_address_and_store_keypair()
-                myBtcAddress=addr                
-            elif c in dictIds.keys():
-                myBtcAddress=dictIds[c]
-            else:
-                print "invalid choice"
-        elif choice==9:
-            #for manually upgrading the working contract
-            while True:
-                print "current working contract:\n"
-                for k,v in workingContract.text.iteritems():
-                    print k,v
-                for addr,sig in workingContract.signatures.iteritems():
-                    print "Signed by: ",addr[:5],"..."
-                    print "Signature: ",sig
-                kchoice = shared.get_validated_input("Choose a parameter",str)   
-                if kchoice not in workingContract.text.keys():
-                    break
-                vchoice = shared.get_validated_input("Set the value:",str)
-                contractLock.acquire()
-                try:
-                    workingContract.modify(kchoice,vchoice)
-                finally:
-                    contractLock.release()
-            
-        elif choice==10:
-            if not myBtcAddress:
-                print "you need to define the identity before deleting its queue!"
+            elif choice==5:
+                #send a message to the RE
+                print "TODO"
+                
+            elif choice==6:
+                exit()
+                
+        else:    
+            print """Please choose an option:
+            [1] Send signed contract to counterparty
+            [2] Send chat message
+            [3] Exit
+            [4] Check if counterparty is online
+            [5] Pay deposit and fee
+            [6] View/set active escrow
+            [7] Show available pending contracts
+            [8] Create or choose id
+            [9] Modify and set the working contract
+            [10] Purge old messages
+            [11] Switch escrow
+            """
+            choice = shared.get_validated_input("Enter an integer:",int)
+            if choice in [1,2,4,5,6,7,9,10,11] and not myself:
+                print "You need to set an identity first."
                 continue
-            Msg.purgeMQ(myBtcAddress)
             
-        else:
-            print "invalid choice. Try again."
-
-
+            if choice==1:
+                if not myself.signContractCNE():
+                    print "something went wrong signing"
+                if not myself.sendSignedContractToCtrprtyCNE():
+                    print "you attempted to send an unsigned contract"
+            elif choice == 2:
+                text = shared.get_validated_input("Enter chat message:",str)
+                #TODO
+                #sendChatToCtrprty(ctrprty,text)
+                
+            elif choice == 3:
+                exit(0)
+                
+            elif choice == 4:
+                if not ctrprty:
+                    print "You have to set the counterparty first!\n"
+                    continue
+                #TODO
+                #sendCtrprtyAliveRequest(ctrprty,myEscrow)
+                
+            
+            elif choice == 5:
+                c = shared.get_binary_user_input('You have chosen to pay fees from '\
+                                +myself.uniqID()+' : are you sure?','y','y','n','n')
+                if c == 'y':
+                    txhash = myself.payInitialFees()
+                    if not txhash:
+                        shared.debug(0,\
+                    ["Error, failed to pay the fees. The account probably isn't funded."])
+                    else:
+                        shared.debug(0,["Successfully paid into tx: ",txhash])
+                continue
+                    
+            elif choice==6:
+                print "Current contract hash:\n",myself.workingContract.textHash
+                print "Current contract details:\n",myself.workingContract.getContractText()
+                print "Current contract signatures:\n",myself.workingContract.signatures
+                
+            elif choice==7:
+                if not myself.pendingContracts:
+                    print "No contracts are currently proposed."
+                    continue
+                else:
+                    myself.printPendingContracts()
+                    
+                    
+            elif choice==8:
+                
+                #TODO not needed now; will need a rework when really switching
+                #if receiverThread:
+                #    myself.inboundMessagingExit=True
+                
+                listIds = [f for f in os.listdir(multisig.msd) if os.path.isfile(os.path.join(multisig.msd,f)) and f.endswith('.private')]
+                dictIds = {}
+                for i,fname in enumerate(listIds):
+                    #if not fname.endswith('.private'):
+                        #continue
+                    print "["+str(i+1)+"] "+fname[:-8]
+                    dictIds[i+1]=fname[:-8]
+                c = shared.get_validated_input("Choose an identity or 0 for a new one",int)
+                if c==0:
+                    addr,pub,priv = multisig.create_tmp_address_and_store_keypair()
+                    myBtcAddress=addr                
+                elif c in dictIds.keys():
+                    myBtcAddress=dictIds[c]
+                else:
+                    print "invalid choice"
+                
+                #create or override the master "useragent object"
+                myself = UserAgent(basedir=g("Directories","agent_base_dir"),\
+                                   btcaddress=myBtcAddress,\
+                                   bankinfo="stuff",currency=g("Agent","base_currency"))                    
+                myself.workingContract = Contract.Contract(contractDetails)
+                
+                #for responding to messages from the escrow MQ server
+                receiverThread = ThreadWithRetval(target= myself.processInboundMessages)
+                receiverThread.daemon = True
+                receiverThread.start()                  
+                
+            elif choice==9:
+                #for manually upgrading the working contract
+                myself.editWorkingContract()
+                
+            elif choice==10:
+                Msg.purgeMQ(myself.uniqID())
+            
+            elif choice==11:
+                #TODO: code to deal with connection switch
+                changeEscrow()
+                c = shared.get_binary_user_input("Do you want to use this as RE?",'y','y','n','n')
+                RE = True if c == 'y' else False
+                continue
+                
+            else:
+                print "invalid choice. Try again."

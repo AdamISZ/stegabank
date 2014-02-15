@@ -17,7 +17,8 @@ Messaging Protocol for the ssl log escrow server running rabbitMQ:
 
 7. The 'message' will be a string of text which will be interpreted by the other agent.
 
-8. The 'message' will have a format MSGTYPE:data,data,data,....
+8. The 'message' will have a format MSGTYPE:data,data,data;signature
+(8a. In case of messages sent by escrow, no signature is appended.)
 
 9. If the message is not one of [TRANSACTION_SYNC_REQUEST,TRANSACTION_SYNC_RESPONSE,TRANSACTION_SYNC_COMPLETE], then the first data item in (8) MUST be a new transaction state (in case of message TO escrow, this is a request which may or may not be agreed to; in case of message FROM escrow, this is a confirmation/statement of fact).
 
@@ -26,39 +27,36 @@ QUERY_STATUS - data are: counterparty id (=btc address)
 QUERY_STATUS_RESPONSE: data are: 'ONLINE' or 'OFFLINE' or 'BUSY'
 CNE_SIGNED_CONTRACT - data are: contract text (json)|signature
 CNE_CONTRACTS_SIGNED - data are:BuyerBTCAddress,SellerBTCAddress,ContractHash
-CNE_CONTRACT_SIG_FAIL - data are: contract hash
+CNE_CONTRACT_SIG_FAIL - data are: reason
+CNE_DEPOSIT_TIMEDOUT - data are: none
+CNE_CONTRACT_SUCCESS - data are: btc address for deposits|contractJSON|escrow signature
+CNE_RE_CHOICE_STARTED - data are: timestamp
+CNE_RE_CHOSEN - data are: escrow ID|contractJSON|escrow pubkey|RE multisigaddress
 CNE_CHAT - data are: chatmessage
+CNE_RE_TRANSFER - data are: transaction object pickle dump|buyer sig|seller sig|escrow sig|btc deposit hash
 REQUEST_REJECTED - data are:reason
-CLIENT_ALIVE_REQUEST - data are: none
-CLIENT_ALIVE_RESPONSE - data are: none
-CLIENT_LOGON - data are: none
-CLIENT_LOGOUT - (unused)
-TRANSACTION_SYNC_REQUEST - data are: none
-TRANSACTION_SYNC_RESPONSE - data are: string in pickle format
-TRANSACTION_SYNC_COMPLETE - data are: none
-TRANSACTION_REQUEST - data are: buyerID,sellerID,amount,price,currency
-TRANSACTION_ACCEPT - data are: buyerID,sellerID,amount,price,currency,creation time
-CLIENT_TALK - data are: text message to counterparty
-TRANSACTION_REJECT - data are: reason
-TRANSACTION_ABORT - no data
-TRANSACTION_ABORT_ACCEPTED - no data
-TRANSACTION_ABORT_REJECTED - data are: reason
-BANK_SESSION_START_REQUEST - no data
-BANK_SESSION_START_READY - no data
-BANK_SESSION_START_ACCEPTED - no data
-BANK_SESSION_START_REJECTED - data are: reason
-BANK_SESSION_ENDED - data are: y/n (indicates success or failure)
-BANK_SESSION_ABORT - no data
-DISPUTE_L1_REQUEST - data are: reason for request,..
-SSL_DATA_REQUEST - data are: no data
-SSL_DATA_SEND - data are: hash1,hash2,..
-SSL_DATA_RECEIVED - data are: none
-SSL_DATA_REJECTED - data are: none
-DISPUTE_L1_ADJUDICATION_FAILURE - data are: reason for failure
+RE_CNE_TX_CONFIRM_RECEIPT - data are: none
+RE_CNE_TX_REJECT_RECEIPT - data are: none
+RE_TRANSACTION_SYNC_REQUEST - data are: none
+RE_TRANSACTION_SYNC_RESPONSE - data are: string in pickle format
+RE_TRANSACTION_SYNC_COMPLETE - data are: none
+RE_SELLER_DEPOSIT - data are: btc seller deposit hash
+RE_SELLER_DEPOSIT_SUCCESS - no data
+RE_SELLER_DEPOSIT_REJECT - data are: required amount (total),
+RE_BANK_SESSION_START_REQUEST - no data
+RE_BANK_SESSION_START_READY - no data
+RE_BANK_SESSION_START_ACCEPTED - no data
+RE_BANK_SESSION_START_REJECTED - data are: reason
+RE_BANK_SESSION_ENDED - data are: y/n (indicates success or failure)
+RE_BANK_SESSION_ABORT - no data
+RE_DISPUTE_REQUEST - data are: reason for request,..
+RE_SSL_KEYS_REQUEST - data are: no data
+RE_SSL_KEYS_SEND - data are: keyline1,keyline2
+RE_SSL_KEYS_RECEIVED - data are: none
+RE_SSL_KEYS_REJECTED - data are: reason
 DISPUTE_L1_ADJUDICATION - data are: agent awarded to, reason for award
 DISPUTE_L2_REQUEST_SSL_KEYS - data are: none
-DISPUTE_L2_SEND_SSL_KEYS - data are: [CLIENT RANDOM/RSA],random,master secret,..
-DISPUTE_L2_SEND_HTML_EVIDENCE - data are: html src, html src,...
 TRANSACTION_SUCCESS_REQUEST - data are: none
 TRANSACTION_SUCCESS_REQUEST_ACCEPTED - data are: none
+VERIFICATION_FAILED - data are: none
 
