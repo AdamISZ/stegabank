@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Advanced</title>
+    <link rel="stylesheet" href="css/bootstrap.min.css">
+</head>
+
+<body>
+<div class="container">
+<div class="navbar">
+    <div class="navbar-inner">
+    <ul class="nav">
+        <li><a href="home.html">Home</a></li>
+        <li><a href="escrows.html">Escrows</a></li>
+        <li  class="active"><a href="advanced.html">Advanced</a></li>
+    </ul>
+    </div>
+</div>
+
+<div class="row">
+<div class="span3">
+<H6>Oracle EBS public snapshot ID</H6>
+<script>
+    var prefs = Components.classes["@mozilla.org/preferences-service;1"] .getService(Components.interfaces.nsIPrefService).getBranch("extensions.lspnr.");    
+    var snapshot_id = prefs.getCharPref("snapshot_id")
+    document.write(" <input id=\"input_snapshot\" type=\"text\" name=\"input_field\" readonly value=\"" + snapshot_id + "\"> ")    
+</script>
+<button id="edit_button" onclick="edit()" class="btn btn-primary btn-lg">Edit</button>
+<button id="apply_button" onclick="apply()" class="btn btn-primary btn-lg" disabled>Apply</button>
+
+</div>
+
+</div>
+
+<div id="myModal" class="modal hide fade" tabindex="-1" role="dialog">
+<div class="modal-header">
+    <button type="button" class="close" data-dismiss="modal">×</button>
+    <h3 id="myModalLabel" >Warning</h3>
+</div>
+<div class="modal-body">
+    <H4>Only change these values if you know exactly what you are doing. Otherwise this system may be rendered inoperable.</H4>
+</div>
+<div class="modal-footer">
+        <button id="modal_confirm" class="btn " data-dismiss="modal" onclick="modalConfirm()">I understand</button>
+        <button class="btn btn-primary" data-dismiss="modal">Get me out of here</button>
+</div>
+</div><!-- modal -->
+
+
+<script>
+function edit(){
+  $("#myModal").modal('show')
+}
+
+function apply(){
+    var prefs = Components.classes["@mozilla.org/preferences-service;1"] .getService(Components.interfaces.nsIPrefService).getBranch("extensions.lspnr.");    
+    prefs.setCharPref("snapshot_id", document.getElementById("input_snapshot").value)
+    document.location.reload(true)
+}
+
+function modalConfirm(){
+  document.getElementById("edit_button").setAttribute("disabled","true")
+  document.getElementById("apply_button").removeAttribute("disabled")
+  document.getElementById("input_snapshot").removeAttribute("readonly")
+}
+
+</script>
+
+
+<script src="jquery-2.0.3.min.js"></script>
+<script src="bootstrap-modal.js"></script>
+<script src="bootstrap-transition.js"></script>
+</body>
+</html>
