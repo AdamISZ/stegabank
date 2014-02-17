@@ -81,6 +81,7 @@ class Transaction():
         for sig in self.contract.signatures.values():
             pub = multisig.ecdsa_recover(msg,sig)
             if addr==multisig.pubtoaddr(pub):
+                shared.debug(2,["Got address",addr,"for pubkey,",pub])
                 return pub
                 
     def getRole(self,agentID):

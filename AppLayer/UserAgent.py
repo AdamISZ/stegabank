@@ -534,7 +534,19 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
         #construct a message to the escrow
         shared.debug(0,["Sending bank session end confirm to seller and escrow"])
         self.sendMessage('RE_BANK_SESSION_ENDED:'+rspns,txID=tx.uniqID())
-                
+    
+    def makeRedemptionSignature(self,transaction,toCounterparty=True):
+        
+        ctrprtyID = transaction.buyer if transaction.seller == self.uniqID()\
+            else transaction.seller
+        receiver = ctrprtyID if toCounterparty else self.uniqID()
+        #TODO this assumes the seller is signing
+        return multisig.createSigForRedemptionRaw(transaction.getCtrprtyPubkey(False),\
+                                                  transaction.getCtrprtyPubkey(True),\
+                                                  g("Escrow","escrow_pubkey"),\
+                                                  transaction.sellerFundingTransactionHash, 
+                                                 receiver)
+        
     def startFirefox(self):    
         #if not os.path.isdir(os.path.join(datadir, 'firefox')): 
         #    os.mkdir(os.path.join(datadir, 'firefox'))
@@ -742,65 +754,6 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
                     stcpdir,"using ssl decryption key:",kf])
         return sharkutils.get_magic_hashes(stcpdir,kf,\
                                         port=g("Agent","agent_stcp_port"))
-        
-    def doBankingSession(self,tx):
-        rspns=''
-        role = tx.getRole(self.uniqID())
-        if role =='buyer':
-            self.activeEscrow.requestBankSessionStart(tx)
-    
-        #wait for response - same for both parties at least in this script.
-        if not self.activeEscrow.negotiateBankSession(tx):
-            shared.debug(0,["We failed to initialise the banking session"\
-                            "properly, unfortunately. Returning to menu."])
-            self.endBankingSession(tx,'n')
-            return False
-    
-        #if we reached here as seller it means we promise that squid is running.
-        #if we reached here as buyer it means we promise to be ready to start banking.
-    
-        #here we set up the pipes for the internet traffic, as long as everything
-        #is in order
-        if not self.startBankingSession(tx): 
-            shared.debug(0,["Could not start banking session for transaction",\
-                tx.uniqID(),"because this transaction does not belong to you."])
-            exit(1)
-    
-        if role=='buyer':
-            print ("When firefox starts, please perform internet banking."
-            "If you can't connect, please close the browser."
-            "If you can connect, then when you have finished your internet"
-            "banking, please close firefox.")
-            time.sleep(5)
-            shared.local_command([g("Exepaths","firefox_exepath")],bg=True)
-        
-            #TODO: need to set things using a plugin
-            #TODO: insert test session; escrow can check if it can 
-            #receive valid SSL using a test case
-            #something to account for the case where the proxy didn't work?
-            #TODO: this will need some serious 'refactoring'!
-            ffname = os.path.basename(g("Exepaths","firefox_exepath"))
-            shared.wait_for_process_death(ffname)
-            
-            rspns = shared.get_binary_user_input("Did you complete the payment successfully?",\
-                                         'y','y','n','n')
-            
-            #we have finished our banking session. We need to tell the others.
-            self.activeEscrow.sendConfirmationBankingSessionEnded(tx,rspns)
-            #if we shut down python immediately the connection is dropped 
-            #and the message gets dropped! Ouch, what a bug!TODO
-            time.sleep(10)
-            #TODOput some code to get the confirmation of storage from escrow
-            #(and counterparty?) so as to be sure everything was done right
-        else:
-            shared.debug(0,["Waiting for signal of end of banking session."])
-        
-            #wait for message telling us the buyer's finished
-            rspns = 'y' if self.activeEscrow.waitForBankingSessionEnd(tx) else 'n'
-            shared.debug(0,["The banking session is finished."])
-    
-        #final cleanup - for now only storing the premaster keys
-        self.endBankingSession(tx,rspns)
         
     #unused for now
     def findEscrow(self):

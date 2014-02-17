@@ -272,7 +272,9 @@ def changeEscrow():
     else:
         #rewrite the settings file and reset the escrow
         shared.config.set("Escrow","escrow_id",value=escrowList[c-1][0])
+        shared.config.set("Escrow","escrow_pubkey",value=escrowList[c-1][2])
         shared.debug(2,["Set the escrow id to:",g("Escrow","escrow_id")])
+        shared.debug(2,["Set the escrow pubkey to:",g("Escrow","escrow_pubkey")])
         
 if __name__ == "__main__":
     #first connect to CNE
@@ -313,6 +315,7 @@ if __name__ == "__main__":
     RE = False
     
     while True:
+        '''
         if (myself):
             print "****WORKING ON IDENTITY: "+myself.uniqID()
             c,u = multisig.get_balance_lspnr(myself.uniqID())
@@ -324,17 +327,24 @@ if __name__ == "__main__":
             except:
                 #necessary because empty queue raises Exception
                 pass
+        '''
         if RE:
             print """You are on RE. Please choose an option:
             [1] Show current transactions and choose one 
-            [2] Pay mBTC to be transferred into multisig
-            [3] Request banking session as buyer
-            [4] Start firefox and do banking
-            [5] Confirm receipt of funds
-            [6] Exit
+            [2] Pay mBTC to be transferred into multisig (seller)
+            [3] Request banking session (buyer)
+            [4] Dispute receipt of funds (seller)
+            [5] Confirm receipt of funds (buyer)
+            [6] Show transaction details
+            [7] Exit
             """
             
             choice = shared.get_validated_input("Enter an integer:",int)
+            
+            if choice in [2,3,4,5,6] and txRE is None:
+                print "You need to specify a transaction first"
+                continue 
+            
             if choice==1:
                 if not myself.synchronizeTransactions():
                     shared.debug(0,["Error synchronizing transactions"])                              
@@ -347,16 +357,14 @@ if __name__ == "__main__":
                 print "set txre to",str(txRE)
                 
             elif choice == 2:
-                if not txRE:
-                    shared.debug(0,["Error: you must choose a transaction to perform this action"])
-                    continue
                 if not myself.transactions[txRE].seller == myself.uniqID():
                     shared.debug(0,["Error: this action is to be performed by the seller,"\
                                     ,myself.transactions[txRE].seller])
                     continue
                 
                 if not myself.transactions[txRE].sellerFundingTransactionHash:
-                    amt = int(myself.transactions[txRE].contract.text['mBTC Amount'])
+                    amt = int(myself.transactions[txRE].contract.text['mBTC Amount'])\
+                        +shared.defaultBtcTxFee
                     payee = myself.transactions[txRE].msigAddr
                     sellerDepositHash = multisig.spendUtxos(myself.uniqID(),myself.uniqID(),\
                                                             payee,None,amt=amt)
@@ -380,10 +388,6 @@ if __name__ == "__main__":
                                    txID=myself.transactions[txRE].uniqID())
                 
             elif choice==3:
-                if txRE is None:
-                    shared.debug(0,["Error, you must define the transaction first"])
-                    continue
-                
                 if not myself.getTxByIndex(txRE).getRole(myself.uniqID())=='buyer':
                     shared.debug(0,["Error, only the buyer can start banking"])
                     continue
@@ -428,13 +432,34 @@ if __name__ == "__main__":
                         break
                         
             elif choice==4:
-                myself.doBankingSession(txRE)
+                print "unused"
+                continue
                 
             elif choice==5:
                 #send a message to the RE
-                print "TODO"
-                
+                if txRE is None:
+                    shared.debug(0,["Error, you can't do this without specifying a transaction first"])
+                else:
+                    if myself.getTxByIndex(txRE).getRole(myself.uniqID()) != 'seller':
+                        shared.debug(0,["Error, you cannot acknowledge receipt of fiat unless you are the seller!"])
+                    else:
+                        #construct the signature to redeem the bitcoin escrow
+                        #to the buyer
+                        sig = myself.makeRedemptionSignature(myself.getTxByIndex(txRE))
+                        if sig:
+                            myself.sendMessage("RE_FIAT_RECEIPT_ACKNOWLEDGE:"+sig,\
+                                       txID=myself.getTxByIndex(txRE).uniqID())
+                        else:
+                            shared.debug(0,["Sorry, cannot make the payment, probably\
+                             because the initial deposit is not yet confirmed. Please\
+                              try again later."])
+                continue
+            
             elif choice==6:
+                print myself.getTxByIndex(txRE).contract.getContractDetails()
+                print "signature completed on:"
+                print myself.getTxByIndex(txRE).signatureCompletionTime
+            elif choice==7:
                 exit()
                 
         else:    

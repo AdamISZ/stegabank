@@ -50,6 +50,8 @@ RE_BANK_SESSION_START_REJECTED - data are: reason
 RE_BANK_SESSION_ENDED - data are: y/n (indicates success or failure)
 RE_BANK_SESSION_ABORT - no data
 RE_DISPUTE_REQUEST - data are: reason for request,..
+RE_FIAT_RECEIPT_ACKNOWLEDGE - data are: signature for fund release
+RE_TRANSACTION_COMPLETED - data are: none
 RE_SSL_KEYS_REQUEST - data are: no data
 RE_SSL_KEYS_SEND - data are: keyline1,keyline2
 RE_SSL_KEYS_RECEIVED - data are: none

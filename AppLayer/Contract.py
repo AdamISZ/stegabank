@@ -41,6 +41,9 @@ class Contract(object):
     def getContractText(self):
         return json.dumps(self.text)
     
+    def getContractDetails(self):
+        return "Contract:\n"+self.getContractText()+"Signatures:\n"+str(self.signatures)
+    
     def getSignature(self,role):
         agent =self.text['Buyer BTC Address'] if role == 'buyer' else self.text['Seller BTC Address']
         if not agent in self.signatures.keys(): return None

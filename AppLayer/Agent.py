@@ -46,6 +46,7 @@ class Agent(object):
                 y.append({'host':d[1]})
                 y[i]['pubkey']=d[2]
                 y[i]['id']=d[0]
+            shared.debug(4,["Generated this escrow list:",y])
             return y 
                 
     def transactionUpdate(self, full=False, txID='',tx=None,new_state=''):
@@ -166,6 +167,7 @@ class Agent(object):
             #TODO fix
             recipientID = g("Escrow","escrow_id")
         text,sig = multisig.signText(self.uniqID(),':'.join(msg.split(':')[1:]))
+        
         newMsg = {}
         newMsg[txID+'.'+self.uniqID()]=msg+';'+sig
         Msg.sendMessages(newMsg,recipientID,chanIndex) 

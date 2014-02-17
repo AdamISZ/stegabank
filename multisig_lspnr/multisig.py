@@ -126,6 +126,64 @@ def create_sig_for_redemption(uniqueid,uniqueid1,uniqueid2,amt,txfee,addr_to_be_
     #for convenience
     return sig
 
+def createSigForRedemptionRaw(pub1,pub2,pub3,utxoHash,addrToBePaid,txFee=None):
+    '''pub1 is the id being used to sign, pub2 and 3 the other 2 used
+    to create the msig address
+    utxoHash is the txHash to be spent'''
+    
+    print "using utxo hash:"+utxoHash
+    shared.debug(2,["Using these pubkeys:",pub1,pub2,pub3])
+    
+    pubs = [pub1,pub2,pub3]
+    pubs.sort()
+    mscript = mk_multisig_script(pubs,2,3)
+    msigaddr = scriptaddr(mscript.decode('hex'))
+    shared.debug(0,["Made multisig address:",msigaddr])
+    if not txFee:
+        txFee = shared.defaultBtcTxFee
+    
+    #construct inputs
+    ins = history(msigaddr)
+    print ins
+    ins = [x for x in ins if 'spend' not in x.keys()]
+    ins = [x for x in ins if x['output'].startswith(utxoHash)] 
+    
+    shared.debug(0,["Constructed inputs:",ins])
+    
+    if len(ins) == 0:
+        shared.debug(0,["Error, there are no utxos to spend from):",msigaddr])
+        return None
+    
+    #construct output
+    #deduce payment value
+    toPay = 0
+    for x in ins:
+        toPay += x['value']
+    if not txFee:
+        toPay -= shared.defaultBtcTxFee
+    else:
+        toPay -= txFee   
+    outs = [{'value':toPay,'address':addrToBePaid}]
+    
+    tmptx = mktx(ins,outs)  
+    shared.debug(0,["Made transaction:",deserialize(tmptx)])
+    #find the private key in storage corresponding to pub1
+    privfile = os.path.join(msd,pubtoaddr(pub1)+'.private')
+    
+    with open(privfile,'r') as f:
+        f.readline() #todo - how to do 3 at once?
+        f.readline()
+        f.readline()
+        priv = f.readline().strip()
+    #in current version there will be only one input, but left here for easy extension later
+    #sigs = []
+    #for i,utxo in enumerate(ins): 
+    #    sigs.append(multisign(tmptx.decode('hex'),i,mscript.decode('hex'),priv))
+    shared.debug(0,["Extracted private key:",priv])
+    
+    print multisign(tmptx.decode('hex'),0,mscript.decode('hex'),priv)
+    return multisign(tmptx.decode('hex'),0,mscript.decode('hex'),priv)
+
 #we assume: exactly two signatures are applied, which can be any
 #of buyer,seller and escrow. If the order in which they are provided is
 #different to that used to create the multisig address, swap is needed so
@@ -144,7 +202,7 @@ def need_swap(uniqueid1,uniqueid2,pubs):
     return False
 
 def needSwapRaw(sig1,sig2,pubs):
-    pos = {}
+    pubs.sort()
     for id in [uniqueid1,uniqueid2]:
         with open(os.path.join(msd,id+'.share'),'r') as fi:
             fi.readline()
@@ -156,38 +214,51 @@ def needSwapRaw(sig1,sig2,pubs):
         return True
     return False    
 
-def broadcastToNetworkRaw(sigArray,pubs,utxoHashes,addrToBePaid,txfee=None):
+def broadcastToNetworkRaw(sigArray,pubs,utxoHash,addrToBePaid,txfee=None):
     '''arguments:
-    sigArray is of the form [[sig1 sig2],[sig1 sig2],..]
-    where each list element is associated with inputs 0,1,2.. etc
-    and [sig1,sig2] must be in the correct order - the same order as the pubkeys
-    pubs is of the form [pub1,pub2,pub3] and will be sorted alphanumerically
-    (the sigs must correspond in THAT order
+    sigArray is of the form [[[sig1,sig2],[pub1,pub2]],[[sig1,sig2],[pub1,pub2]],..]
+    where each outer list element is associated with inputs 0,1,2.. etc
+    and [sig1,sig2] correspond to [pub1,pub2]
+    - sigs will be reordered if necessary based on pubkey alphanumeric order
     Amount is deduced as all coming from those outputs (no change)
     If set, txfee should be in satoshis
     utxoHashes is a list of all utxos to spend
     addrToBePaid is self explanatory
     '''
-    #construct msgig addr and script
+   
+    #construct msig addr and script
     pubs.sort()
     mscript = mk_multisig_script(pubs,2,3)
     msigaddr = scriptaddr(mscript.decode('hex'))
     #construct inputs
-    ins = multisig.history(msigaddr)
+    ins = history(msigaddr)
     ins = [x for x in ins if 'spend' not in x.keys()]
-    ins = [x for x in ins if x['output'] in utxoHashes]
+    ins = [x for x in ins if x['output'].startswith(utxoHash)]
     
     #error check
     if len(ins) != len(sigArray):
+        shared.debug(0,[str(len(ins))," len ins"])
+        shared.debug(0,[str(len(sigArray))+" len sigarray"])
         raise Exception("The appropriate number of signatures has not been provided")
     
+    #order the signatures correctly
+    amendedSigs = []
+    for sA in sigArray:
+        isigs,ipubs = sA
+        shared.debug(5,["Got pubkeys:",ipubs])
+        shared.debug(5,["Got sigs:",isigs])
+        if not sorted(ipubs)==ipubs:
+            amendedSigs.append(reversed(isigs))
+        else:
+            amendedSigs.append(isigs)
+    shared.debug(5,["Got amended sigs:",amendedSigs])
     #construct output
     #deduce payment value
     toPay = 0
     for x in ins:
         toPay += x['value']
     if not txfee:
-        toPay -= 10000
+        toPay -= shared.defaultBtcTxFee
     else:
         toPay -= txfee   
     outs = [{'value':toPay,'address':addrToBePaid}]
@@ -196,9 +267,11 @@ def broadcastToNetworkRaw(sigArray,pubs,utxoHashes,addrToBePaid,txfee=None):
     
     #sign inputs
     for i,inp in enumerate(ins):
-        tmptx = apply_multisignatures(tmptx,i,mscript,sigArray[i])
+        tmptx = apply_multisignatures(tmptx,i,mscript,amendedSigs[i])
         
     #push tx
+    print tmptx
+    print deserialize(tmptx)
     rspns = ea.send_tx(tmptx)
     print "Electrum server sent back:",rspns
     return tx_hash(tmptx).encode('hex')    

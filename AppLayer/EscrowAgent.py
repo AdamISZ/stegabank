@@ -81,8 +81,8 @@ class EscrowAgent(Agent.Agent):
     
     def getMultisigAddress(self, tx, epk):
         multisig.escrow_pubkey = epk
-        bpk = tx.getCtrprtyPubkey(tx.buyer)
-        spk = tx.getCtrprtyPubkey(tx.seller)
+        bpk = tx.getCtrprtyPubkey(True)
+        spk = tx.getCtrprtyPubkey(False)
         return multisig.createMultisigRaw([epk,bpk,spk])
         
 
@@ -215,6 +215,10 @@ class EscrowAgent(Agent.Agent):
                     self.cleanUpBankSession([k,m])
                 continue
             
+            elif 'RE_FIAT_RECEIPT_ACKNOWLEDGE:' in m:
+                sig = m.split(':')[1]
+                self.releaseFunds(self.getTxByID(txID),True,sig)
+                
             ##the message is about a transaction; find it in the db:
             #tx = self.getTxByID(k.split('.')[0])
             #if (not tx) and ('TRANSACTION_REQUEST' not in m):
@@ -255,6 +259,32 @@ class EscrowAgent(Agent.Agent):
                 #continue      
     
     
+    def releaseFunds(self,transaction,toBuyer,sig):
+        '''Provide signature for multisig release to buyer
+        if 'toBuyer' is true then send tx to network
+        Also return deposit to buyer and seller
+        TODO: if toBuyer is false, release to seller 
+        '''
+        #construct all pubkeys:
+        pubBuyer = transaction.getCtrprtyPubkey(True)
+        pubSeller = transaction.getCtrprtyPubkey(False)
+        pubEscrow = g("Escrow","escrow_pubkey") #this config is fixed on the escrow        
+        receiver = transaction.buyer if toBuyer else transaction.seller
+        sig2 = multisig.createSigForRedemptionRaw(pubEscrow, pubBuyer, pubSeller,\
+                                                  transaction.sellerFundingTransactionHash,\
+                                                 receiver)
+        
+        pubs = [pubBuyer,pubSeller,pubEscrow]
+        #for now, the sig array has ONE element, corresponding to the
+        #seller funding transaction hash
+        #TODO: add another 1/2 transactions for deposit redemption
+        sigArray = [[[sig,sig2],[pubSeller,pubEscrow]]]
+        multisig.broadcastToNetworkRaw(sigArray,pubs,transaction.sellerFundingTransactionHash,\
+                                      receiver)
+        shared.debug(0,["Sent the bitcoins to the buyer; transaction completed successfully!"])
+        self.transactionUpdate(tx=transaction,new_state=700)
+        
+        
     def sendRejectionMessage(self,txID,requester,m):
         self.sendMessage('MESSAGE_REJECTED:'+m,recipientID=requester,txID=txID)
     
@@ -551,11 +581,21 @@ class EscrowAgent(Agent.Agent):
         
         for t in self.transactions:
             #little hack for bank session testing
-            if t.state in [600,601,602]:
-                self.transactionUpdate(tx=t,new_state=501)            
+            if t.state in [600,601,603]:
+                self.transactionUpdate(tx=t,new_state=501) 
+            elif t.state in [700]:
+                self.transactionUpdate(tx=t,new_state=602)
             #TODO are we sure we want to do this?
-            if t.state==402:
+            elif t.state==402:
                 self.transactionUpdate(tx=t,new_state=400)
+            elif t.state==500 and t.sellerFundingTransactionHash:
+                amts = int(t.contract.text['mBTC Amount'])
+                checkThread = threading.Thread(\
+                    target=self.checkBalanceWithTimeout,\
+                    args=[t,60*60,t.msigAddr,t.seller,amts,\
+                          501,503,t.sellerFundingTransactionHash])
+                checkThread.setDaemon(True)
+                checkThread.start()                
                 
     def takeAppropriateActions(self):
         
@@ -585,6 +625,11 @@ class EscrowAgent(Agent.Agent):
                 
             elif t.state==501:
                 shared.debug(0,["Success! Ready for banking"])
+            
+            elif t.state==700:
+                for recipientID in [t.buyer,t.seller]:
+                    self.sendMessage("RE_TRANSACTION_COMPLETED:", \
+                                     recipientID=recipientID, txID=t.uniqID())
         
         self.transactionUpdate(full=True)
         
