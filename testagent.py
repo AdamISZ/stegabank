@@ -336,7 +336,8 @@ if __name__ == "__main__":
             [4] Dispute receipt of funds (seller)
             [5] Confirm receipt of funds (buyer)
             [6] Show transaction details
-            [7] Exit
+            [7] Specify ssl keys as proof of transfer (buyer)
+            [8] Exit
             """
             
             choice = shared.get_validated_input("Enter an integer:",int)
@@ -432,34 +433,50 @@ if __name__ == "__main__":
                         break
                         
             elif choice==4:
-                print "unused"
+                shared.debug(0,["You have chosen to dispute the sending of fiat money."])
+                if myself.getTxByIndex(txRE).getRole(myself.uniqID()) not in ['seller','buyer']:
+                    shared.debug(0,["Error, you cannot dispute fiat sending unless you are the seller or buyer!"])
+                
+                else:
+                    reasonForDispute=shared.get_validated_input(\
+                        "Please enter a brief description of the reason for the dispute:",str)                    
+                    sig = myself.makeRedemptionSignature(myself.getTxByIndex(txRE),\
+                                                         toCounterparty=False)
+                    if sig:
+                        myself.sendMessage("RE_DISPUTE_REQUEST:"+reasonForDispute+'|'+sig,\
+                                           txID=myself.getTxByIndex(txRE).uniqID())
+                    else:
+                        shared.debug(0,["Sorry, there was an error in the construction\
+                        of the redeeming payment signature, cannot proceed. You may \
+                        have to wait longer for the initial deposit into the multisig\
+                        to confirm."])
                 continue
                 
             elif choice==5:
-                #send a message to the RE
-                if txRE is None:
-                    shared.debug(0,["Error, you can't do this without specifying a transaction first"])
+                if myself.getTxByIndex(txRE).getRole(myself.uniqID()) != 'seller':
+                    shared.debug(0,["Error, you cannot acknowledge receipt of fiat unless you are the seller!"])
                 else:
-                    if myself.getTxByIndex(txRE).getRole(myself.uniqID()) != 'seller':
-                        shared.debug(0,["Error, you cannot acknowledge receipt of fiat unless you are the seller!"])
+                    #construct the signature to redeem the bitcoin escrow
+                    #to the buyer
+                    sig = myself.makeRedemptionSignature(myself.getTxByIndex(txRE))
+                    if sig:
+                        myself.sendMessage("RE_FIAT_RECEIPT_ACKNOWLEDGE:"+sig,\
+                                   txID=myself.getTxByIndex(txRE).uniqID())
                     else:
-                        #construct the signature to redeem the bitcoin escrow
-                        #to the buyer
-                        sig = myself.makeRedemptionSignature(myself.getTxByIndex(txRE))
-                        if sig:
-                            myself.sendMessage("RE_FIAT_RECEIPT_ACKNOWLEDGE:"+sig,\
-                                       txID=myself.getTxByIndex(txRE).uniqID())
-                        else:
-                            shared.debug(0,["Sorry, cannot make the payment, probably\
-                             because the initial deposit is not yet confirmed. Please\
-                              try again later."])
+                        shared.debug(0,["Sorry, cannot make the payment, probably\
+                         because the initial deposit is not yet confirmed. Please\
+                          try again later."])
                 continue
             
             elif choice==6:
                 print myself.getTxByIndex(txRE).contract.getContractDetails()
                 print "signature completed on:"
                 print myself.getTxByIndex(txRE).signatureCompletionTime
+            
             elif choice==7:
+                myself.chooseSSLKeys(myself.getTxByIndex(txRE))
+                
+            elif choice==8:
                 exit()
                 
         else:    

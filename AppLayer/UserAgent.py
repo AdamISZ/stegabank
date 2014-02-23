@@ -213,7 +213,10 @@ class UserAgent(Agent.Agent):
                         continue
                     rspns = m.split(':')[1]
                     self.endBankingSession(transaction, rspns)
-
+                
+                elif 'RE_SSL_KEYS_REQUEST' in m:
+                    transaction = self.getTxByID(k.split('.')[0])
+                    
                 else:
                     #catch all for messages which just go to the front end
                     shared.debug(0,["Putting this to the q,",m])
@@ -388,21 +391,53 @@ class UserAgent(Agent.Agent):
             
         return 'Signed contract successfully received from counterparty: '+ca
     
+    
+    #TODO: this action naturally fits a GUI; for now just get
+                #user to choose one or more key numbers
+    def chooseSSLKeys(self,tx):
+        keydir = os.path.join(g("Directories","agent_base_dir"),\
+        '_'.join([tx.getRole(self.uniqID()),tx.uniqID(),"banksession"]),"keys")
+        print ("You have chosen to send ssl keys to the escrow."
+        "Do this carefully. Check the folder: ", keydir ," and "
+        "decide which key number or numbers to send by looking at the "
+        "corresponding html in the html directory, then enter those "
+        "numbers here one by one at the prompt. When finished, type 0.")
+        #get a listing of all valid key files
+        all_keys = os.listdir(keydir)
+        requested_keys=[]
+        while True:
+            choice = shared.get_validated_input("Enter a number (0 to quit)",int)
+            if choice == 0:
+                if not any(requested_keys):
+                    print "Error, you must select at least one key."
+                else:
+                    print "Keys will now be sent to escrow."
+                    break
+            else:
+                if str(choice)+'.key' not in all_keys:
+                    print "That number does not correspond to an existing \
+                        key, please try again."
+                else:
+                    requested_keys.append(os.path.join(keydir,str(choice)+'.key'))
+                    
+        self.sendSSLKeys(tx,requested_keys)  
+                
+                
+                
     #must be called with a list of filenames that the user has chosen,
     #each containing a particular ssl key (in the "keys" subdirectory under
     #the transaction directory)
-    #def sendSSLKeys(self,transaction,keyfiles):
-        #if (transaction.getRole(self.uniqID()) != 'buyer'):
-            #shared.debug(0,["Error, get keys was called for a transaction",\
-                            #"where we're not the buyer!"])
-        #keys = []
-        #for kf in keyfiles:
-            #with open(kf) as f:
-                #shared.debug(0,["Trying to open a keyfile:",kf])
-                #keys.append(f.readline())
-        #shared.debug(0,["Set keys to:",keys])
-        #self.activeEscrow.sendMessages({'x':'DISPUTE_L2_SEND_SSL_KEYS:'+\
-                                #','.join(keys)},transaction=transaction,rs=801)
+    def sendSSLKeys(self,transaction,keyfiles):
+        if (transaction.getRole(self.uniqID()) != 'buyer'):
+            shared.debug(0,["Error, get keys was called for a transaction",\
+                            "where we're not the buyer!"])
+        keys = []
+        for kf in keyfiles:
+            with open(kf) as f:
+                shared.debug(0,["Trying to open a keyfile:",kf])
+                keys.append(f.readline())
+        shared.debug(0,["Set keys to:",keys])
+        self.sendMessage('RE_SSL_KEYS_SEND:'+','.join(keys),txID=transaction.uniqID())
         
     #to be called after escrow accessor is initialised
     #and transaction list is synchronised.

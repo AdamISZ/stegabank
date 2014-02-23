@@ -58,6 +58,11 @@ class Transaction():
         #to be set once all signatures  have been applied; gives a unique identity
         self.signatureCompletionTime=None
         
+        #if the seller disputes the transfer, the reason should be stored
+        self.disputeReason = None
+        
+        
+        
     #functions as a name for the transaction; note a transaction
     #object cannot be instantiated without a contract, and is not
     #defined completely until the date of signatures is marked
