@@ -1,9 +1,8 @@
-<<<<<<< HEAD
 stegabank
 =========
 
 See the ssllog repo for the history
-=======
+
 ssllog
 ======
 For now this is mainly a placeholder. Watch this space.  
@@ -31,4 +30,3 @@ This version of the project is based on the following architecture for transacti
 Wireshark is used post-transaction for network auditing functions.
 
 Far more explanation to come. Obviously.
->>>>>>> 4d0f018f5a7957162daa0fc536f4c31d4a2f0c74
