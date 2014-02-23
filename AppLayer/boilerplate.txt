@@ -1,0 +1,60 @@
+CONTRACT
+==========
+This is a contract between the owner of:
+*** Buyer BTC Address:: 15hnXLUv9gYsLUMm5ADY4YHRt5Guj7C84s
+acting as buyer of bitcoins, and the owner of:
+*** Seller BTC Address:: 1HGX6nECJ3aq3X7mxkTAKNgCChzeEt4wcj
+acting as seller of bitcoins.
+
+By cryptographically signing this contract using the private key associated with one of the
+above addresses, you agree to be bound by its terms and conditions.
+
+The currency to be transferred from the buyer to the seller, identified by its ISO code, is:
+*** Fiat Currency ISO:: USD
+
+The amount of said currency to be transferred electronically from the buyer to the seller is:
+*** Fiat Currency Amount:: 500.00
+Please note: this is the amount that must be received by the seller AFTER any fees imposed by banks.
+Buyers should therefore choose the option to pay all fees themselves in their internet banking interface.
+
+The amount of mBTC (thousandths of a bitcoin) to be transferred from the seller to the buyer is:
+*** mBTC Amount:: 10000
+This amount is to be placed into escrow with the escrow agent chosen randomly by the software,
+after this contract has been signed by both parties.
+
+The SHA256-hashed bank account name and number of the buyer is:
+*** Buyer Bank Details Hash:: 1af303e7627a72b4853b4bc67eb6bc157207938a525d206c83b0b53f3189b62c 
+The buyer promises to reveal to the escrow the information that generated
+this hash in case of a dispute. In case the buyer cannot provide
+bank details which match this hash, he/she forfeits the entire bitcoin amount of the transaction.
+
+The SHA256-hashed bank account name and number of the seller is:
+*** Seller Bank Details Hash:: 0337ae3c14dd27a6d42fe217b81348d2308448e2717ef86e3b5f1333f73b5fc0
+The seller promises to reveal to the escrow the information that generated
+this hash in case of a dispute. In case the seller cannot provide
+bank details which match this hash, he/she forfeits the entire bitcoin amount of the transaction.
+
+*** Seller Deposit Fee:: 4000
+Once the contract has been signed by both buyer and seller, the seller has committed to making
+best efforts to complete the transaction. If he/she subsequently aborts the transaction, this
+amount will be transferred to the buyer.
+
+*** Buyer Deposit Fee:: 4000
+Once the contract has been signed by both buyer and seller, the buyer has committed to making
+best efforts to complete the transaction. If he/she subsequently aborts the transaction, this
+amount will be transferred to the buyer.
+
+*** Seller Escrow Fee:: 4000
+Seller promises to include this amount with his transfer to the buyer. This 
+fee will be deducted and kept by the escrow.
+
+*** Buyer Escrow Fee:: 4000
+Buyer promises to include this amount with his deposit fee. This fee
+will be deducted and kept by the escrow.
+
+*** Bank Wire Sending Deadline:: 2014-01-31 (YYYY-MM-DD) 13:20 (HH:mm)
+Buyer promises to make the transfer before the time indicated, as recorded in
+the timestamps of the internet traffic (timestamps in the decrypted 
+internet banking software will not constitute proof of time).
+
+*** Seller Proxy Service Agreement:: Seller promises to be logged in to escrow as negotiated with buyer after signing contract during the following three periods:2014-01-25 1900-2100 UTC,2014-01-26 1900-2100 UTC,2014-01-27 1900-2100 UTC. Failure to make the proxy service available during at least one of these periods may result in the loss of the sellers escrow deposit fee, which will be transferred to the buyer in this case.

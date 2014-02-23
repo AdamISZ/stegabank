@@ -1,0 +1,64 @@
+Messaging Protocol for the ssl log escrow server running rabbitMQ:
+
+1. All messages are passed to other agents depending on the 'recipientID'
+   specified in the call to 'sendMessages' in MessageWrapper.py
+
+2. Messages to escrow only must have recipient ID: "escrow"
+
+3. Messages to both must have "counterpartyID.escrow" 
+
+4. Messages to counterparty only must have "counterpartyID"
+
+5. Each message in the dict messages is of form {'topic':'message'} (stored in a string as topic|message)
+
+6. The 'topic' field will contain <the ID of the transaction>.<the ID of the sender>
+
+6a. In case no transaction is specified in the message, the transaction ID can be replaced by '0' in (6).
+
+7. The 'message' will be a string of text which will be interpreted by the other agent.
+
+8. The 'message' will have a format MSGTYPE:data,data,data;signature
+(8a. In case of messages sent by escrow, no signature is appended.)
+
+9. If the message is not one of [TRANSACTION_SYNC_REQUEST,TRANSACTION_SYNC_RESPONSE,TRANSACTION_SYNC_COMPLETE], then the first data item in (8) MUST be a new transaction state (in case of message TO escrow, this is a request which may or may not be agreed to; in case of message FROM escrow, this is a confirmation/statement of fact).
+
+10. List of MSGTYPES:
+QUERY_STATUS - data are: counterparty id (=btc address)
+QUERY_STATUS_RESPONSE: data are: 'ONLINE' or 'OFFLINE' or 'BUSY'
+CNE_SIGNED_CONTRACT - data are: contract text (json)|signature
+CNE_CONTRACTS_SIGNED - data are:BuyerBTCAddress,SellerBTCAddress,ContractHash
+CNE_CONTRACT_SIG_FAIL - data are: reason
+CNE_DEPOSIT_TIMEDOUT - data are: none
+CNE_CONTRACT_SUCCESS - data are: btc address for deposits|contractJSON|escrow signature
+CNE_RE_CHOICE_STARTED - data are: timestamp
+CNE_RE_CHOSEN - data are: escrow ID|contractJSON|escrow pubkey|RE multisigaddress
+CNE_CHAT - data are: chatmessage
+CNE_RE_TRANSFER - data are: transaction object pickle dump|buyer sig|seller sig|escrow sig|btc deposit hash
+REQUEST_REJECTED - data are:reason
+RE_CNE_TX_CONFIRM_RECEIPT - data are: none
+RE_CNE_TX_REJECT_RECEIPT - data are: none
+RE_TRANSACTION_SYNC_REQUEST - data are: none
+RE_TRANSACTION_SYNC_RESPONSE - data are: string in pickle format
+RE_TRANSACTION_SYNC_COMPLETE - data are: none
+RE_SELLER_DEPOSIT - data are: btc seller deposit hash
+RE_SELLER_DEPOSIT_SUCCESS - no data
+RE_SELLER_DEPOSIT_REJECT - data are: required amount (total),
+RE_BANK_SESSION_START_REQUEST - no data
+RE_BANK_SESSION_START_READY - no data
+RE_BANK_SESSION_START_ACCEPTED - no data
+RE_BANK_SESSION_START_REJECTED - data are: reason
+RE_BANK_SESSION_ENDED - data are: y/n (indicates success or failure)
+RE_BANK_SESSION_ABORT - no data
+RE_DISPUTE_REQUEST - data are: reason for request|signature for refund
+RE_FIAT_RECEIPT_ACKNOWLEDGE - data are: signature for fund release
+RE_TRANSACTION_COMPLETED - data are: none
+RE_SSL_KEYS_REQUEST - data are: no data
+RE_SSL_KEYS_SEND - data are: keyline1,keyline2
+RE_SSL_KEYS_RECEIVED - data are: none
+RE_SSL_KEYS_REJECTED - data are: reason
+DISPUTE_L1_ADJUDICATION - data are: agent awarded to, reason for award
+DISPUTE_L2_REQUEST_SSL_KEYS - data are: none
+TRANSACTION_SUCCESS_REQUEST - data are: none
+TRANSACTION_SUCCESS_REQUEST_ACCEPTED - data are: none
+VERIFICATION_FAILED - data are: none
+
