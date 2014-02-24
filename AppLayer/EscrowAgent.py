@@ -560,6 +560,10 @@ class EscrowAgent(Agent.Agent):
     def checkForRestartActions(self):
         
         for t in self.transactions:
+            #BIG hack!
+            t.state = 501
+            
+            '''
             #little hack for bank session testing
             if t.state in [600,601,603]:
                 self.transactionUpdate(tx=t,new_state=501) 
@@ -579,7 +583,7 @@ class EscrowAgent(Agent.Agent):
                           501,503,t.sellerFundingTransactionHash])
                 checkThread.setDaemon(True)
                 checkThread.start()
-            
+            '''
                 
                 
     def takeAppropriateActions(self):

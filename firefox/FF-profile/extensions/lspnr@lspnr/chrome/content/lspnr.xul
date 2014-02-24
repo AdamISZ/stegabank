@@ -5,18 +5,12 @@
   <toolbar id="addon-bar">
     <box id="box" orient="horizontal" align="center">
       <label id="label_info" value="" style="font: bold 11px Verdana, sans-serif !important; color:#006ECC;"/>
-      <label id="label_accno" value="Account number:"/>
-      <label id="label_accno_white" value="Account number:" style="color:white;" hidden="true"/>
-      <textbox id="textbox_accno" width="150" oninput="accno_input()" />
-      <label id="label_sum" value="Sum:"/>
-      <label id="label_sum_white" value="Sum:" style="color:white;" hidden="true"/>
-      <textbox id="textbox_sum" width="100"  oninput="sum_input()" />
-      <button id="button_blue" maxheight="50" width="100" hidden="true" image="chrome://lspnr/skin/icon.png" oncommand="pageMarked()" style="-moz-appearance: none; background-color: #006ECC !important;"/>
-      <button id="button_grey1" maxheight="50" width="100" hidden="false" image="chrome://lspnr/skin/icon_grey.png" style="-moz-appearance: none; background-color: #EEEEEE !important;" disabled="true"/>
+      <button id="button_blue" maxheight="50" width="100" hidden="false" image="chrome://lspnr/skin/icon.png" oncommand="pageMarked()" style="-moz-appearance: none; background-color: #006ECC !important;"/>
+      <button id="button_grey1" maxheight="50" width="100" hidden="true" image="chrome://lspnr/skin/icon_grey.png" style="-moz-appearance: none; background-color: #EEEEEE !important;" disabled="true"/>
       <button id="button_yellow" maxheight="50" width="100" hidden="true" image="chrome://lspnr/skin/icon.png" oncommand="clearSSLCache()" style="-moz-appearance: none; background-color: #E4F93A !important;"/>
       <button id="button_grey2" maxheight="50" width="100" hidden="true" image="chrome://lspnr/skin/icon_grey.png" style="-moz-appearance: none; background-color: #A0A0A0 !important;" disabled="true"/>
       <tooltip id="tooltip" noautohide="true">
-        <label value="Click the padlock after entering data"/>
+        <label value="Click the padlock to start a new ssl session"/>
       </tooltip>
       <panel id="panel" noautohide="true">
         <label value="Simple panel"/>
