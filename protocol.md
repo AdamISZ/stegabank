@@ -74,13 +74,19 @@ Once the transaction has been initialised the two users now switch their connect
 
   If b) or c) occurs, we have the following steps:
 
-9. Seller sends dispute message or sends no message before the timeout (in the latter case, the escrow can insist on a response before further action).
+9 Seller sends dispute message or sends no message before the timeout (in the latter case, the escrow can insist on a response before further action).
+
 10 RE sends request for ssl keys to buyer.
-11. Buyer chose SSL keys in step 6,now he sends them to RE.
-12. RE extracts all html available using SSL keys transferred - and messages the owner of the escrow server.
-13. Manual intervention - the owner of the server reviews the terms of the contract and the html provided and adjudicates whether the fiat transfer occurred or not.
-13a. In rare cases where there is ambiguity, it is the escrow's prerogative to ask for a further internet banking session from either the buyer or the seller to give further evidence that a transfer did or did not occur.
-14. Once escrow has completed adjudication, they request a signature for a spending transaction from the party who they have adjudicated in favour of, append their own signature, and pay out the BTC (minus transaction fees, as before). The deposits are then transferred to the buyer and seller (regardless of imputed guilt of one party).
+
+11 Buyer chose SSL keys in step 6,now he sends them to RE.
+
+12 RE extracts all html available using SSL keys transferred - and messages the owner of the escrow server.
+
+13 Manual intervention - the owner of the server reviews the terms of the contract and the html provided and adjudicates whether the fiat transfer occurred or not.
+
+13a In rare cases where there is ambiguity, it is the escrow's prerogative to ask for a further internet banking session from either the buyer or the seller to give further evidence that a transfer did or did not occur.
+
+14 Once escrow has completed adjudication, they request a signature for a spending transaction from the party who they have adjudicated in favour of, append their own signature, and pay out the BTC (minus transaction fees, as before). The deposits are then transferred to the buyer and seller (regardless of imputed guilt of one party).
 
 
 
