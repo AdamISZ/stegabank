@@ -28,8 +28,11 @@ Escrows serve two distinct roles: contract negotation escrow (CNE) and random es
 Contract Negotiation
 ====================
 Any user may contact any other user on any CNE. Discovery may occur through any side channels off-protocol. Users may chat with each other to decide the terms of the contract, either on the CNE or off. Once a decision has been made, users will sign contracts, including pricing and timing details, and submit them to the CNE. Once the CNE receives two identical contracts from matching participants, it also signs it and requests deposits. These deposits are a small fixed fee, set pool wide, required for transaction set up and will be transferred to the RE, to be returned to the user later at the end of the contract.
+
 If one user fails to submit the deposit in the required time, the other user's deposit is returned and the CNE takes no further action.
+
 If both deposits are submitted, the protocol requires the CNE to take the following steps:
+
 1. Source a publically verifiable random number (currently using: https://beacon.nist.gov/rest/record/last)
 2. Derive from that number a choice of escrow from the public list of escrows (see above "Escrows") using the simple arithmetic algorithm defined in the source code (see AppLayer/EscrowAgent.py)
 3. Publish the random number and escrow choice to the users and other escrows
