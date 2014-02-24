@@ -64,15 +64,15 @@ Once the transaction has been initialised the two users now switch their connect
 6. RE tells buyer that seller is ready. Buyer performs internet banking. At end of internet banking, buyer stores: a network trace, ssl keys and records of decrypted html using those keys. Buyer chooses which html pages (and which ssl keys) constitute proof of transfer, but does not send them yet. RE stores an encrypted record of the transfer only.
 7. If internet banking fails in some way, steps 5 and 6 may be repeated.
 
-Timing of 5-7 is limited by the terms of the contract (i.e. buyer is required to perform internet banking before time X). Also in the contract, seller promises to be available at a certain set of times (a "proxy service agreement"). If either side violates these conditions, they forfeit their right to the BTC funded in the multisig address (in the rare case where both violate, the escrow applies discretion - either end the transaction if internet banking hasn't taken place, or request agreement between the parties on new timing limits).
+  Timing of 5-7 is limited by the terms of the contract (i.e. buyer is required to perform internet banking before time X). Also in the contract, seller promises to be available at a certain set of times (a "proxy service agreement"). If either side violates these conditions, they forfeit their right to the BTC funded in the multisig address (in the rare case where both violate, the escrow applies discretion - either end the transaction if internet banking hasn't taken place, or request agreement between the parties on new timing limits).
 
 8. When internet banking is complete, RE waits for one of three cases: a) seller confirms transfer successful, b) time out without any response from seller or c)seller raises a dispute.
 
-If a) occurs we get the following simple completion:
+  If a) occurs we get the following simple completion:
 
 9. Seller sends confirmation message with transaction signature, RE appends own transaction signature and the BTC are transferred to the buyer (minus the transaction fee, which the escrow can transfer as they wish). The deposits are then transferred back to the buyer and seller.
 
-If b) or c) occurs, we have the following steps:
+  If b) or c) occurs, we have the following steps:
 
 9. Seller sends dispute message or sends no message before the timeout (in the latter case, the escrow can insist on a response before further action).
 10 RE sends request for ssl keys to buyer.
