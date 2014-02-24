@@ -38,8 +38,11 @@ If both deposits are submitted, the protocol requires the CNE to take the follow
 3. Publish the random number and escrow choice to the users and other escrows
 4. Generate a multisig address for the chosen escrows (now called RE) combined with the two users and transfer the deposits from itself to that RE.
 5. Instantiate a transaction object and pass it to the RE.
+6. 
 The steps 1-3 can be verified as fair by all participants, thus ensuring the chosen RE could never have been known in advance by any party.
+
 At this point (strictly, after both deposits have been submitted), the users are not allowed to back out of the transaction without forfeiting their deposit.
+
 If at this stage one user abandons the transaction (i.e. violates a timeout on their actions), their deposit will be transferred to the OTHER USER (not destroyed, not sent to charity, not given to the escrow). 
 
 [It is particularly important that forfeited deposits are not given to the escrow, as this would enable a rogue escrow to Sybil-attack the system by generating lots of fake users and abandoning transactions when a favourable/colluding/hacked escrow was not chosen, cost free. Giving deposits to charity is problematic, requiring perfect trust in charities; destroying deposits may work but why not give the deposit to the party who has been troubled by the deceptive behaviour - the counterparty. This further incentivises honesty.]
@@ -52,6 +55,7 @@ Transactions
 ============
 
 Once the transaction has been initialised the two users now switch their connection to the new RE. The protocol then proceeds through the following steps:
+
 1. RE waits for confirmed deposits transferred to appropriate multisig address (RE, buyer, seller).
 2. RE requests bitcoin to be sold to be transferred to multisig by seller.
 3. Seller funds the multisig address.
@@ -65,9 +69,11 @@ Timing of 5-7 is limited by the terms of the contract (i.e. buyer is required to
 8. When internet banking is complete, RE waits for one of three cases: a) seller confirms transfer successful, b) time out without any response from seller or c)seller raises a dispute.
 
 If a) occurs we get the following simple completion:
+
 9. Seller sends confirmation message with transaction signature, RE appends own transaction signature and the BTC are transferred to the buyer (minus the transaction fee, which the escrow can transfer as they wish). The deposits are then transferred back to the buyer and seller.
 
 If b) or c) occurs, we have the following steps:
+
 9. Seller sends dispute message or sends no message before the timeout (in the latter case, the escrow can insist on a response before further action).
 10 RE sends request for ssl keys to buyer.
 11. Buyer chose SSL keys in step 6,now he sends them to RE.
