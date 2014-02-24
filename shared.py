@@ -72,39 +72,6 @@ def makedir(dirlist):
     new_dir = os.path.join(*dirlist)
     if not os.path.exists(new_dir): os.makedirs(new_dir)
     return new_dir
-
-#an ugly idea; but it's OK for now
-def wait_for_process_death(pname):
-    while True:
-        p_found=False
-        for proc in psutil.process_iter():
-            if pname in proc.name:
-                p_found = True
-                time.sleep(1)
-        if not p_found: break
-            
-#Update 27 Sep 2013. It seems a bit mad to think that this might be OK;
-#running remote commands on a remote server by untrusted parties!? Only 
-#use it for testing where it will be convenient sometimes.
-'''#Call a command on the remote escrow - intended to be platform independent,
-#allow background or foreground execution, redirect to a file on remote server
-def remote_escrow_command(command,redirect='',bg=False):
-    ssh = config.get("Exepaths","sshpass_exepath")
-    ssh_port = config.get("Escrow","escrow_ssh_port")
-    login = get_login('buyer') #TODO: should change config structure so we use
-                                #this agent's login, not specifically buyer/seller
-    debug(1,["Attempting remote command:",command," on host:",login[1]])
-    if redirect=='NULL':
-        command = command + ' > /dev/null 2>&1'
-    elif redirect:
-        command = command + ' > ' + redirect
-        
-    if bg: 
-        command = command+' &'
-        #in case of foreground execution, we can use the output; if not
-        #it doesn't matter
-    return subprocess.check_output([ssh,login[0]+'@'+login[1],'-P',ssh_port,\
-                                '-pw',login[2],command])'''
    
 #copy all files from remote_dir on the remote (escrow) server to the local_dir
 #directory on the local machine
@@ -124,11 +91,6 @@ def send_files_remote(remote_dir,local_files,login,agent,dir=True):
     params.extend([local,login[1]+'@'+login[2]+':'+remote_dir+'/.'])
     print subprocess.check_output(params)
 
-#pretty self-explanatory - assuming it works!
-def kill_processes(procs):
-    for proc in procs:
-        if (proc):
-            proc.kill()
         
 #note: local_command takes input argument command as a LIST
 def local_command(command,bg=False,redirect=''):
