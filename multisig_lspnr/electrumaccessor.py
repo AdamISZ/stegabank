@@ -1,7 +1,10 @@
 import random, re, errno, os, struct, hashlib, ast
 import sys, time, json, types, string, exceptions 
+import shared, threading
 
 import socket
+
+tcpLock = threading.Lock()
 
 DEFAULT_SERVERS = {
     #'electrum.coinwallet.me': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
@@ -28,6 +31,7 @@ def connect_electrum():
     global s
     global is_connected
     if is_connected:
+        shared.debug(3,["Already connected"])
         return True
     hosts = list(DEFAULT_SERVERS.keys())
     random.shuffle(hosts)
@@ -42,12 +46,12 @@ def connect_electrum():
         try:
             s.connect(( host.encode('ascii'), int(port)))
         except:
-            print "failed to connect to:", host, str(port)
+            shared.debug(3,["failed to connect to:", host, str(port)])
             continue #try the next server
 
         s.settimeout(20)
         is_connected = True
-        print "connected to", host, str(port)
+        shared.debug(3,["connected to", host, str(port)])
         return True
     return False
     
@@ -55,89 +59,96 @@ def send_tx(raw_tx):
     global s
     global is_connected
     if not connect_electrum():
-        print "error, failed to connect to ANY electrum server"
+        shared.debug(0,["error, failed to connect to ANY electrum server"])
         socketstop()
         return False
     return get_from_electrum([str(raw_tx)],t='b')
 
 #the second argument is the type of operation you're requesting
 def get_from_electrum(inputs,t='a'):
-    global s
-    global is_connected
-        
-    if not connect_electrum():
-        print "Failed to connect to ANY electrum server"
-        return False
-    if t=='a':
-        req = 'blockchain.address.get_history'
-    elif t=='t':
-        req = 'blockchain.transaction.get'
-    elif t=='b':
-        req = 'blockchain.transaction.broadcast'
-    else:
-        print "invalid request type to electrum server"
-        #todo: 
-        exit(1)
-        
-    tcp_requests = []
-    reqreturns=[]
-    
-    for input in inputs:
-        if isinstance(input,list):
-            tcp_request = req,input
-        else:
-            tcp_request= req,[str(input)]
-    
-        if not send_tcp([tcp_request]):
-            print "Failed to send request to electrum server"
-        
-        out = ''
-        
-        while is_connected:
-            try: 
-                timeout = False
-                msg = s.recv(1024)
-                
-            except socket.timeout:
-                timeout = True
-
-            except socket.error, err:
-                if err.errno in [11, 10035]:
-                    print "socket errno", err.errno
-                    time.sleep(0.1)
-                    continue
-                else:
-                    print "socket err: ", err.errno
-                    raise
-
-            if timeout:
-                # ping the server with server.version, as a real ping does not exist yet
-                # not sure about this, don't want to get involved in some non-standard weird ping
-                print "getting a timeout here - we'll try another server"
-                socketstop()
-                return get_from_electrum(inputs,t='a')
-
-            out += msg
+    tcpLock.acquire()
+    try:
+        global s
+        global is_connected
             
-            if msg == '': 
-                print "msg is null"
-                is_connected = False
-                return
-            if out.find('\n') != -1: #means this is end of message, so break out of both loops at end
-                while True:
-                    x = out.find('\n')
-                    if x==-1: 
-                        break
-                    c = out[0:x]
-                    out = out[x+1:]
-                    #ast.literal_eval is the best way to read this json stuff into python
-                    #don't ask me why json.loads() doesn't work, but right now it doesn't
-                    reqreturns.append(ast.literal_eval(c))
-                break
-                   
-    return reqreturns                
+        if not connect_electrum():
+            shared.debug(0,["Failed to connect to ANY electrum server"])
+            return False
+        if t=='a':
+            req = 'blockchain.address.get_history'
+        elif t=='t':
+            req = 'blockchain.transaction.get'
+        elif t=='b':
+            req = 'blockchain.transaction.broadcast'
+        else:
+            print "invalid request type to electrum server"
+            #todo: 
+            exit(1)
+            
+        tcp_requests = []
+        reqreturns=[]
+        
+        for input in inputs:
+            if isinstance(input,list):
+                tcp_request = req,input
+            else:
+                tcp_request= req,[str(input)]
+            
+            if not send_tcp([tcp_request]):
+                shared.debug(0,["Failed to send request to electrum server"])
+            
+            out = ''
+            
+            while is_connected:
+                
+                try: 
+                    timeout = False
+                    msg = s.recv(1024)
+                    
+                except socket.timeout:
+                    timeout = True
+    
+                except socket.error, err:
+                    if err.errno in [11, 10035]:
+                        shared.debug(2,["socket errno", err.errno])
+                        time.sleep(0.1)
+                        continue
+                    else:
+                        shared.debug(2,["socket err: ", err.errno])
+                        raise
+                
+                    
+                if timeout:
+                    # ping the server with server.version, as a real ping does not exist yet
+                    # not sure about this, don't want to get involved in some non-standard weird ping
+                    shared.debug(2,["getting a timeout here - we'll try another server"])
+                    socketstop()
+                    return get_from_electrum(inputs,t='a')
+    
+                out += msg
+                
+                if msg == '': 
+                    shared.debug(5,["msg is null"])
+                    is_connected = False
+                    return
+                if out.find('\n') != -1: #means this is end of message, so break out of both loops at end
+                    while True:
+                        x = out.find('\n')
+                        if x==-1: 
+                            break
+                        c = out[0:x]
+                        out = out[x+1:]
+                        #ast.literal_eval is the best way to read this json stuff into python
+                        #don't ask me why json.loads() doesn't work, but right now it doesn't
+                        reqreturns.append(ast.literal_eval(c))
+                    break
+                       
+        return reqreturns
+    finally:
+        tcpLock.release()
                     
 def send_tcp(messages):
+    
     global s
     out = ''
     message_id=1
@@ -146,6 +157,7 @@ def send_tcp(messages):
         method, params = m 
         request = json.dumps( { 'id':message_id, 'method':method, 'params':params } )
         #print "-->", request
+        shared.debug(4,["Sending a request to electrum:",request])
         message_id += 1
         out += request + '\n'
         while out:
@@ -154,15 +166,15 @@ def send_tcp(messages):
                 out = out[sent:]
             except socket.error,e:
                 if e[0] in (errno.EWOULDBLOCK,errno.EAGAIN):
-                    print_error( "EAGAIN: retrying")
+                    shared.debug(3,["EAGAIN: retrying"])
                     time.sleep(0.1)
                     continue
                 else:
                     # this happens when we get disconnected
-                    print "Not connected, cannot send"
+                    shared.debug(0,["Not connected, cannot send"])
                     socketstop()
                     return False
-                   
+                    
     return True
 
 

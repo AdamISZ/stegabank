@@ -49,6 +49,12 @@ class Transaction():
         #initial deposit and fees. Passed into RE by CNE.
         self.depositHash = None
         
+        #set of utxos paid by seller into CNE as initial deposit
+        self.sellerInitialDeposits=None
+        
+        #set of utxos paid by buyer into CNE as initial deposit
+        self.buyerInitialDeposits=None
+        
         #record of the publically chosen RE for this tx
         self.chosenEscrow = None
         

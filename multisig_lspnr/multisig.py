@@ -306,6 +306,24 @@ def check_escrow_present():
     if not escrow_pubkey:
         raise Exception("The escrow's pubkey should be set before depositing escrowed bitcoins!")
         
+
+def spendUtxosDirect(addrOwner,addrOwnerID,payee,utxoList):
+    """
+    spend a set of utxos as returned from a call to getUtxos()
+    to recipient payee from owner addrOwner
+    """
+    u,total= utxoList
+    outs = [{'value':total-shared.defaultBtcTxFee,'address':payee}]
+    shared.debug(5,["About to make a transaction with these ins:",u,"and these outs:",outs])
+    tmptx = mktx(u,outs)
+    pub,priv = getKeysFromUniqueID(addrOwnerID)
+    for i,x in enumerate(u):
+        tmptx = sign(tmptx,i,priv)        
+    rspns = ea.send_tx(tmptx)
+    shared.debug(2,["Electrum server sent back:",rspns])
+    #in this case we return amount spent for convenience
+    return (total,tx_hash(tmptx).encode('hex'))    
+
 def spendUtxos(addrOwner,addrOwnerID,payee,payers,amt=None):
     """
     Two cases: either a FIXED amount from ONE payer

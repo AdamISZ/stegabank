@@ -31,12 +31,8 @@ class Agent(object):
         self.stcppipe_proc=None
         #persistent store of incomplete transactions connected to this agent;
         #initially empty
-        self.txFile = os.path.join(self.baseDir,'transactions'+self.btcAddress+'.p')
-        if os.path.exists(self.txFile):
-            with open(self.txFile) as txf:
-                self.transactions = pickle.load(txf)
-        else:
-            self.transactions=[]
+        self.reloadTransactions()
+        
 
     def getEscrowList(self):
             eL = g("Escrow","escrow_list").split(',')
@@ -48,7 +44,20 @@ class Agent(object):
                 y[i]['id']=d[0]
             shared.debug(4,["Generated this escrow list:",y])
             return y 
-                
+    
+    def reloadTransactions(self):
+        tdbLock.acquire()
+        try:
+            self.txFile = os.path.join(self.baseDir,'transactions'+self.btcAddress+'.p')
+            if os.path.exists(self.txFile):
+                with open(self.txFile) as txf:
+                    self.transactions = pickle.load(txf)
+            else:
+                self.transactions=[]
+        finally:
+            tdbLock.release()
+            
+        
     def transactionUpdate(self, full=False, txID='',tx=None,new_state=''):
         '''To ensure correct persistence, transaction states can only be updated
             via this method.

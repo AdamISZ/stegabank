@@ -362,16 +362,36 @@ class EscrowAgent(Agent.Agent):
         
         
         
-    def sendDepositTimeout(self,txid):
-        temptx = self.getTxByID(txid)
-        for r in [temptx.buyer,temptx.seller]:
-            self.sendMessage('CNE_DEPOSIT_TIMEOUT:',recipientID=r,txID=txid)
-        #just delete the transaction; no money has changed hands
-        #TODO: not quite! any amounts paid less than the required have
-        #to be rolled back!
-        #edited 20 Jan; just let the transaction stay in default state 207/208
-        #self.transactionUpdate(full=False,txID=txid,tx=None,new_state='')
+    def sendDepositTimeout(self,txid,defaulter=None):
+        '''
+        This is sent when one or both parties have failed to deliver
+        their deposit to the CNE after contract signing is complete.
+        If defaulter is None, it means both have defaulted,
+        meaning only a message is sent to mark the transaction as defunct.
+        Otherwise defaulter marks the role of the defaulter and the
+        other party's deposit is returned.
+        '''
+        tx = self.getTxByID(txid)
+        
+        if defaulter and defaulter not in [tx.buyer,tx.seller]:
+            shared.debug(0,["Critical error: wrong argument"])
             
+        defaultedList = ','.join([tx.buyer,tx.seller]) if not defaulter else defaulter
+        
+        for r in [tx.buyer,tx.seller]:
+            self.sendMessage('CNE_DEPOSIT_TIMEOUT:'+defaultedList,recipientID=r,txID=txid)
+        
+        
+        for a in [[tx.buyer,tx.buyerInitialDeposits],[tx.seller,tx.sellerInitialDeposits]]:
+            if a[1]: #only need to spend back if there are any deposits
+                #we want to spend these utxos back to the depositor, minus txfee
+                shared.debug(0,["For agent:",a[0],"were refunding this:",a[1]])
+                multisig.spendUtxosDirect(self.uniqID(),self.uniqID(),a[0],a[1])
+            
+        #rewind actions completed as necessary; make the transaction defunct
+        self.transactionUpdate(tx=tx,new_state=212)
+        
+        #return the deposit as defined in the transaction   
     def processTimeOut(self,tx):
         #we know that transaction tx ran past its deadline for something
         #send the cancellation/penalty message to the relevant
@@ -401,28 +421,41 @@ class EscrowAgent(Agent.Agent):
             multisig.msd = os.path.join(self.baseDir,"multisig_store")
             txt,sig = multisig.signText(self.uniqID(),contract.getContractTextOrdered())
             contract.sign(multisig.pubtoaddr(g("Escrow","escrow_pubkey")),sig)
+            
         for a in [buyer,seller]:
             if not verdict:
                 ma = m+reason
             else:
                 ma = m+'|'.join([reason,contract.getContractText(),sig])
             self.sendMessage(ma,recipientID=a,txID=txid)
+            
         #persist a new transaction object if it was accepted
         if verdict:
             tx = Transaction(contract)
             tx.CNEDepositAddr=reason
             tx.signatureCompletionTime=int(time.time())
             self.transactionUpdate(full=False,txID='',tx=tx,new_state=203)
-            #set the deadline for deposit
-            #need to start checking the balance; spawn a thread
-            sendingAddresses = [tx.buyer,tx.seller]
-            amts = [tx.contract.getTotalFees('buyer'),tx.contract.getTotalFees('seller')]
+            
+            #need to start checking the balance; spawn a thread for buyer AND seller
+            #TODO magic number for the deposit timeouts?
+            
             receivingAddr = self.uniqID()
-            requestedState = 206
-            failedState = 207
+            
+            sendingAddresses= [tx.buyer]
+            amts = [tx.contract.getTotalFees('buyer')]
+            ctsu=[{203:204,205:206,208:210},{203:207,205:211,208:209}]
+            checkBuyerThread = \
+                    threading.Thread(target=self.checkBalanceWithTimeout,\
+                    args=[tx,60*2,receivingAddr,sendingAddresses,amts,None,None,None,ctsu])
+            checkBuyerThread.daemon=True
+            checkBuyerThread.start()
+            
+            sendingAddresses = [tx.seller]
+            amts = [tx.contract.getTotalFees('seller')]
+            ctsu=[{203:205,204:206,207:211},{203:208,204:210,207:209}]
             checkThread = \
             threading.Thread(target=self.checkBalanceWithTimeout,\
-            args=[tx,60*60,receivingAddr,sendingAddresses,amts,requestedState,failedState])
+            args=[tx,60*2,receivingAddr,sendingAddresses,amts,None,None,None,ctsu])
             checkThread.daemon=True
             checkThread.start()            
             
@@ -475,7 +508,8 @@ class EscrowAgent(Agent.Agent):
     
     def checkBalanceWithTimeout(self,tx,timeout,\
                                  receivingAddr,sendingAddresses,\
-                                 amts,requestedTxState=None,failedTxState=None,txh=None):
+                                 amts,requestedTxState=None,failedTxState=None,\
+                                 txh=None,ctsu=False):
         '''waits to see new transactions on the blockchain with required
         payments.
         If no payment before timeout minutes, or insufficient payments
@@ -489,34 +523,80 @@ class EscrowAgent(Agent.Agent):
         in sendingAddresses.
         In case of success, the transaction is updated 
         to new state requestedTxState (assuming it follows vtst rules)
+        If ctsu is not None, (conditional transaction state update),
+        it is an array with two elements each of which is a dict mapping
+        from a set of possible prior transaction states to their 
+        corresponding succeeding states. The first element is the transitions
+        for successful payment receipt and the second for failed/timed out.
+        Note that the options txh and ctsu are NOT compatible
+        
         All transaction updates use tdbLock lock for thread safety.
         '''
         shared.debug(2,["Starting a balance checking thread with these parameters:",\
                         "receiving address:",receivingAddr,\
-                        "sending addrfess:",sendingAddresses,\
+                        "sending address:",sendingAddresses,\
                         "amts:",amts,\
                         "requested state:",requestedTxState,\
                         "failed state:",failedTxState,\
                         "tx hash:",txh])
         
+        txLock = threading.Lock()
+        
+        if ctsu and txh:
+            shared.debug(0,["Critical error, cannot \
+            specify transaction hash and conditional updates"])
+        
         startTime = int(time.time())
         while True:
-            time.sleep(8)
+            time.sleep(4) #TODO magic number
+                
             if startTime+timeout<int(time.time()):
-                self.transactionUpdate(tx=tx,new_state=failedTxState)
-                return  
+                txLock.acquire()
+                try:
+                    if ctsu:
+                        #update according to failure dict
+                        failureDict = ctsu[1]
+                        if tx.state not in failureDict.keys():
+                            shared.debug(0,["Critical error, cannot update tx state,\
+                            in unrecognized state:",tx.state])
+                        else:
+                            self.transactionUpdate(tx=tx,new_state=failureDict[tx.state])
+                    else:                
+                        self.transactionUpdate(tx=tx,new_state=failedTxState)
+                finally:
+                    txLock.release()
+                    return
             else:
                 if not txh:
                     utxos=[]
                     for s in sendingAddresses:
-                        u,t = multisig.getUtxos(receivingAddr,s)
-                        utxos.append([u,t])
+                        utxos.append(multisig.getUtxos(receivingAddr,s))
+                    
                     flag=True
                     for i,amt in enumerate(amts):
                         if amt > utxos[i][1]:
                             flag=False
                     if flag:
-                        self.transactionUpdate(tx=tx,new_state=requestedTxState)
+                        if ctsu:
+                            #update according to success dict
+                            successDict = ctsu[0]
+                            if tx.state not in successDict.keys():
+                                shared.debug(0,["Critical error, cannot update tx state, in unrecognized state:",tx.state])
+                            else:
+                                #this code is specifically for initial deposits;
+                                #TODO may need refactoring
+                                role = tx.getRole(sendingAddresses[0])
+                                
+                                if role not in ['buyer','seller']:
+                                    shared.debug(0,["Critical error, wrong role:",role])
+                                if role=='buyer':
+                                    tx.buyerInitialDeposits = utxos[0]
+                                else:
+                                    tx.sellerInitialDeposits = utxos[0]
+                                    
+                                self.transactionUpdate(tx=tx,new_state=successDict[tx.state])
+                        else:                        
+                            self.transactionUpdate(tx=tx,new_state=requestedTxState)
                         return 
                 else:
                     u,t = multisig.getUtxos(receivingAddr,sendingAddresses)
@@ -560,10 +640,7 @@ class EscrowAgent(Agent.Agent):
     def checkForRestartActions(self):
         
         for t in self.transactions:
-            #BIG hack!
-            t.state = 501
             
-            '''
             #little hack for bank session testing
             if t.state in [600,601,603]:
                 self.transactionUpdate(tx=t,new_state=501) 
@@ -583,7 +660,7 @@ class EscrowAgent(Agent.Agent):
                           501,503,t.sellerFundingTransactionHash])
                 checkThread.setDaemon(True)
                 checkThread.start()
-            '''
+            
                 
                 
     def takeAppropriateActions(self):
@@ -607,11 +684,14 @@ class EscrowAgent(Agent.Agent):
                                     t.uniqID(),"to random escrow was unsuccessful"])
             
             elif t.state==206:
+                #successful receipt of deposits
                 self.startRandomEscrowChoice(t.uniqID())
             
-            elif t.state==207:
+            elif t.state in [209,210,211]:
+                #TODO: do we want to send a meaningful message? then need to
+                #split this into three calls
                 self.sendDepositTimeout(t.uniqID())
-                
+
             elif t.state==501:
                 shared.debug(0,["Success! Ready for banking"])
             
