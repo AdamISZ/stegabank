@@ -47,9 +47,9 @@ If at this stage one user abandons the transaction (i.e. violates a timeout on t
 
 [It is particularly important that forfeited deposits are not given to the escrow, as this would enable a rogue escrow to Sybil-attack the system by generating lots of fake users and abandoning transactions when a favourable/colluding/hacked escrow was not chosen, cost free. Giving deposits to charity is problematic, requiring perfect trust in charities; destroying deposits may work but why not give the deposit to the party who has been troubled by the deceptive behaviour - the counterparty. This further incentivises honesty.]
 
-If an escrow chose (foolishly) to simply steal deposits, this stealing would be entirely transparent on the blockchain, since the other escrows in the pool would see the contract, signed by the rogue escrow, showing what the deposits were for, and so this would lead to ejection from the pool and total loss of the very large deposit (much beigger than a few deposits). 
+If an escrow chose (foolishly) to simply steal deposits, this stealing would be entirely transparent on the blockchain, since the other escrows in the pool would see the contract, signed by the rogue escrow, showing what the deposits were for, and so this would lead to ejection from the pool and total loss of the very large deposit (much bigger than a few deposits). 
 
-[Note here that it is important that the CNE signs the contract before the deposits are transferred. Users can always send these signed deposits to any other escrow in the pool to prove what happened.]
+[Note here that it is important that the CNE signs the contract before the deposits are transferred. Users can always send these signed contracts to any other escrow in the pool to prove what happened.]
 
 Transactions
 ============
@@ -86,7 +86,8 @@ Once the transaction has been initialised the two users now switch their connect
 
 13a In rare cases where there is ambiguity, it is the escrow's prerogative to ask for a further internet banking session from either the buyer or the seller to give further evidence that a transfer did or did not occur.
 
-14 Once escrow has completed adjudication, they request a signature for a spending transaction from the party who they have adjudicated in favour of, append their own signature, and pay out the BTC (minus transaction fees, as before). The deposits are then transferred to the buyer and seller (regardless of imputed guilt of one party).
+14 Once escrow has completed adjudication, they request a signature for a spending transaction from the party who they have adjudicated in favour of, append their own signature, and pay out the BTC (minus transaction fees, as before). Both deposits are then transferred to that same counterparty.
+
 
 
 
