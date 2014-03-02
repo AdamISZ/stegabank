@@ -68,7 +68,7 @@ class EscrowAgent(Agent.Agent):
             #deal with transactions
             self.takeAppropriateActions() 
             
-            msg = self.getSingleMessage(5)
+            msg = self.getSingleMessage(5,prefix='CNE')
             if not msg:
                 shared.debug(0,["Got nothing, waiting.."])
                 continue
@@ -104,7 +104,7 @@ class EscrowAgent(Agent.Agent):
         tx = pickle.loads(txString)
         if tx.uniqID() != txHash:
             shared.debug(0,["Alert: transaction object passed with inconsistent hash, given",txHash,"should be:",tx.uniqID()])
-            self.sendMessage('RE_CNE_TX_REJECT_RECEIPT:',recipientID=sender,txID=tx.uniqID())
+            self.sendMessage('RE_CNE_TX_REJECT_RECEIPT:',recipientID='CNE'+sender,txID=tx.uniqID())
             return None
         #initiate the new multisig address for this transaction
         tx.msigAddr = self.getMultisigAddress(tx,g("Escrow","escrow_pubkey"))
@@ -121,7 +121,7 @@ class EscrowAgent(Agent.Agent):
             shared.debug(4,["Recovery produced this address:",multisig.pubtoaddr(testaddress)])
             if not testaddress == j:
                 shared.debug(0,["Alert: this transaction is not correctly signed by",j,"- ignoring"])
-                self.sendMessage('RE_CNE_TX_REJECT_RECEIPT:',recipientID=sender,txID=tx.uniqID())
+                self.sendMessage('RE_CNE_TX_REJECT_RECEIPT:',recipientID='CNE'+sender,txID=tx.uniqID())
                 return None
             else:
                 shared.debug(1,["Correct signature from:",j])
@@ -131,7 +131,7 @@ class EscrowAgent(Agent.Agent):
         self.transactionUpdate(tx=tx,new_state=400)
         
         #send back confirmation message (on THIS message queue)
-        self.sendMessage('RE_CNE_TX_CONFIRM_RECEIPT:',recipientID=sender,txID=tx.uniqID())
+        self.sendMessage('RE_CNE_TX_CONFIRM_RECEIPT:',recipientID='CNE'+sender,txID=tx.uniqID())
    
    
     def runRE(self):
@@ -146,7 +146,7 @@ class EscrowAgent(Agent.Agent):
             #are done here before getting external instructions
             self.takeAppropriateActions()
             
-            msg = self.getSingleMessage(5)
+            msg = self.getSingleMessage(5,prefix='RE')
             
             if not msg:
                 shared.debug(0,["Got nothing, waiting.."])
@@ -328,18 +328,22 @@ class EscrowAgent(Agent.Agent):
         m = 'CNE_RE_TRANSFER:'+'|'.join([transaction_string,buyerSig,\
                                          sellerSig,escrowSig,tx.depositHash])
         
-        #TODO: remote connection will need to be setup, for testing on one MQ
         #Hack for testing: set chosen escrow to the "other"
         chosenEscrow=1
-        self.sendMessage(m,recipientID=self.escrowList[chosenEscrow]['id'],txID=tx.uniqID())
-        #once transaction is confirmed received, we update its state so as not to send it again
-        msg = self.getSingleMessage(20)
+        
+        self.sendMessage(m,recipientID='RE'+self.escrowList[chosenEscrow]['id'],txID=tx.uniqID())
+        
+        msg = self.getSingleMessage(20,prefix='CNE')
+        
+        if not msg:
+            return False
         a,b = msg.keys()[0].split('.')
-        if not msg or b != self.escrowList[chosenEscrow]['id'] or tx.uniqID() != a:
-            #we didn't receive a response in 20 seconds
+        if b != self.escrowList[chosenEscrow]['id'] or tx.uniqID() != a:
+            #we have received an inappropriate message
             return False
         else:
             if 'RE_CNE_TX_CONFIRM_RECEIPT' in msg.values()[0]:
+                #once transaction is confirmed received, we update its state so as not to send it again
                 #this is the final state of the transaction on the contract negotiation side
                 self.transactionUpdate(full=False,txID=tx.uniqID(),new_state=301)
                 return True
@@ -390,25 +394,6 @@ class EscrowAgent(Agent.Agent):
             
         #rewind actions completed as necessary; make the transaction defunct
         self.transactionUpdate(tx=tx,new_state=212)
-        
-        #return the deposit as defined in the transaction   
-    def processTimeOut(self,tx):
-        #we know that transaction tx ran past its deadline for something
-        #send the cancellation/penalty message to the relevant
-        #counterparties, make payments if necessary and reset tx state
-        
-        if tx.state == 203:
-            for c in [tx.buyer,tx.seller]:
-                self.sendMessage('CNE_DEPOSIT_TIMEDOUT:',recipientID=r,txID=tx.uniqID())
-            #we must also reverse any payments to the senders TODO
-            #now remove the transaction entirely as it has been aborted
-            self.transactionUpdate(full=False,txID=tx.uniqID(),tx=None,new_state='')
-            return
-        #add code for later timeouts here: TODO   
-        elif tx.state:
-            return
-        else:
-            return
         
     def sendContractVerdictCNE(self,verdict,reason,contract):
         #get the IDs of the two counterparties
@@ -798,7 +783,7 @@ class EscrowAgent(Agent.Agent):
         #next need to request the session to the seller
         self.sendMessage('RE_BANK_SESSION_START_REQUEST:', recipientID=tx.seller, txID=tx.uniqID())
         #we'll block here, but not for long as after all we're checking availability!
-        msg = self.getSingleMessage(timeout=5)
+        msg = self.getSingleMessage(timeout=5, prefix='RE')
         if not msg or 'RE_BANK_SESSION_START_ACCEPTED' not in msg.values()[0]:
             self.sendMessage('RE_BANK_SESSION_START_REJECTED:seller unavailable',\
                              recipientID=tx.buyer, txID=tx.uniqID())

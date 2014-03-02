@@ -243,7 +243,7 @@ def start_minihttp_thread(parentthread):
 #escrow if the counterparty is currently online
 def initiateChatWithCtrprty(myself,ctrprty):
     msg = 'QUERY_STATUS:'+ctrprty    
-    myself.sendMessage(msg)
+    myself.sendMessage(msg,recipientID='CNE')
     rspns = myself.getSingleMessage(timeout=5)
     for k,v in rspns.iteritems():
         if 'ONLINE' in m:
@@ -252,11 +252,7 @@ def initiateChatWithCtrprty(myself,ctrprty):
 
 def sendChatToCtrprty(myself,ctrprty,msgToSend,txID=None):
     #tx will be set after contracts signed
-    myself.sendMessage('CNE_CHAT:'+msgToSend,recipientID=ctrprty,txID=txID)
-
-def sendCtrprtyAliveRequest(myself,ctrprty):
-    msg = {'0.'+myself.uniqID():'QUERY_STATUS:'+ctrprty}
-    sendMessage('QUERY_STATUS:'+ctrprty)        
+    myself.sendMessage('CNE_CHAT:'+msgToSend,recipientID=ctrprty,txID=txID)     
 
 def changeEscrow():
     shared.debug(0,["Current escrow:",g("Escrow","escrow_id")])
@@ -385,7 +381,7 @@ if __name__ == "__main__":
                     sellerDepositHash = myself.transactions[txRE].sellerFundingTransactionHash
                     
                 #message the RE to inform of payment
-                myself.sendMessage("RE_SELLER_DEPOSIT:"+sellerDepositHash,\
+                myself.sendMessage("RE_SELLER_DEPOSIT:"+sellerDepositHash,recipientID='RE',\
                                    txID=myself.transactions[txRE].uniqID())
                 
             elif choice==3:
@@ -396,7 +392,7 @@ if __name__ == "__main__":
                 if not myself.synchronizeTransactions():
                                     shared.debug(0,["Error synchronizing transactions"])                
                 
-                myself.sendMessage("RE_BANK_SESSION_START_REQUEST:",\
+                myself.sendMessage("RE_BANK_SESSION_START_REQUEST:",recipientID='RE',\
                                    txID=myself.transactions[txRE].uniqID())
                 #wait for bank session start accceptance message, 
                 #handled by processInboundMessages, and block 
@@ -444,7 +440,7 @@ if __name__ == "__main__":
                                                          toCounterparty=False)
                     if sig:
                         myself.sendMessage("RE_DISPUTE_REQUEST:"+reasonForDispute+'|'+sig,\
-                                           txID=myself.getTxByIndex(txRE).uniqID())
+                                           recipientID='RE',txID=myself.getTxByIndex(txRE).uniqID())
                     else:
                         shared.debug(0,["Sorry, there was an error in the construction\
                         of the redeeming payment signature, cannot proceed. You may \
@@ -461,7 +457,7 @@ if __name__ == "__main__":
                     sig = myself.makeRedemptionSignature(myself.getTxByIndex(txRE))
                     if sig:
                         myself.sendMessage("RE_FIAT_RECEIPT_ACKNOWLEDGE:"+sig,\
-                                   txID=myself.getTxByIndex(txRE).uniqID())
+                                   recipientID='RE',txID=myself.getTxByIndex(txRE).uniqID())
                     else:
                         shared.debug(0,["Sorry, cannot make the payment, probably\
                          because the initial deposit is not yet confirmed. Please\

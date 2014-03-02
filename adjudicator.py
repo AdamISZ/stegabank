@@ -55,6 +55,7 @@ if __name__ == "__main__":
         [1] Read message from queue
         [2] Choose transaction
         [3] Adjudicate transaction
+        [4] Sign escrow list
         [4] Exit
         
         """

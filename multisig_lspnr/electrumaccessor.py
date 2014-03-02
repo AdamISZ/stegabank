@@ -11,7 +11,7 @@ DEFAULT_SERVERS = {
     'electrum.hachre.de': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
     'electrum.novit.ro': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
     'electrum.stepkrav.pw': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
-    #'ecdsa.org': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
+    'ecdsa.org': {'h': '8081', 's': '50002', 't': '50001', 'g': '8082'},
     'electrum.no-ip.org': {'h': '80', 's': '50002', 't': '50001', 'g': '443'},
     'electrum.drollette.com': {'h': '5000', 's': '50002', 't': '50001', 'g': '8082'},
     'electrum.random.re': {'h': '80', 's': '110', 't': '50001', 'g': '443'},
@@ -31,7 +31,7 @@ def connect_electrum():
     global s
     global is_connected
     if is_connected:
-        shared.debug(3,["Already connected"])
+        #shared.debug(3,["Already connected"])
         return True
     hosts = list(DEFAULT_SERVERS.keys())
     random.shuffle(hosts)
@@ -46,12 +46,12 @@ def connect_electrum():
         try:
             s.connect(( host.encode('ascii'), int(port)))
         except:
-            shared.debug(3,["failed to connect to:", host, str(port)])
+            #shared.debug(3,["failed to connect to:", host, str(port)])
             continue #try the next server
 
         s.settimeout(20)
         is_connected = True
-        shared.debug(3,["connected to", host, str(port)])
+        #shared.debug(3,["connected to", host, str(port)])
         return True
     return False
     
@@ -59,7 +59,7 @@ def send_tx(raw_tx):
     global s
     global is_connected
     if not connect_electrum():
-        shared.debug(0,["error, failed to connect to ANY electrum server"])
+        #shared.debug(0,["error, failed to connect to ANY electrum server"])
         socketstop()
         return False
     return get_from_electrum([str(raw_tx)],t='b')
@@ -72,7 +72,7 @@ def get_from_electrum(inputs,t='a'):
         global is_connected
             
         if not connect_electrum():
-            shared.debug(0,["Failed to connect to ANY electrum server"])
+            #shared.debug(0,["Failed to connect to ANY electrum server"])
             return False
         if t=='a':
             req = 'blockchain.address.get_history'
@@ -95,8 +95,8 @@ def get_from_electrum(inputs,t='a'):
                 tcp_request= req,[str(input)]
             
             if not send_tcp([tcp_request]):
-                shared.debug(0,["Failed to send request to electrum server"])
-            
+                #shared.debug(0,["Failed to send request to electrum server"])
+                print 'a'
             out = ''
             
             while is_connected:
@@ -110,25 +110,25 @@ def get_from_electrum(inputs,t='a'):
     
                 except socket.error, err:
                     if err.errno in [11, 10035]:
-                        shared.debug(2,["socket errno", err.errno])
+                        #shared.debug(2,["socket errno", err.errno])
                         time.sleep(0.1)
                         continue
                     else:
-                        shared.debug(2,["socket err: ", err.errno])
+                        #shared.debug(2,["socket err: ", err.errno])
                         raise
                 
                     
                 if timeout:
                     # ping the server with server.version, as a real ping does not exist yet
                     # not sure about this, don't want to get involved in some non-standard weird ping
-                    shared.debug(2,["getting a timeout here - we'll try another server"])
+                    #shared.debug(2,["getting a timeout here - we'll try another server"])
                     socketstop()
                     return get_from_electrum(inputs,t='a')
     
                 out += msg
                 
                 if msg == '': 
-                    shared.debug(5,["msg is null"])
+                    #shared.debug(5,["msg is null"])
                     is_connected = False
                     return
                 if out.find('\n') != -1: #means this is end of message, so break out of both loops at end
@@ -157,7 +157,7 @@ def send_tcp(messages):
         method, params = m 
         request = json.dumps( { 'id':message_id, 'method':method, 'params':params } )
         #print "-->", request
-        shared.debug(4,["Sending a request to electrum:",request])
+        #shared.debug(4,["Sending a request to electrum:",request])
         message_id += 1
         out += request + '\n'
         while out:
@@ -166,12 +166,12 @@ def send_tcp(messages):
                 out = out[sent:]
             except socket.error,e:
                 if e[0] in (errno.EWOULDBLOCK,errno.EAGAIN):
-                    shared.debug(3,["EAGAIN: retrying"])
+                    #shared.debug(3,["EAGAIN: retrying"])
                     time.sleep(0.1)
                     continue
                 else:
                     # this happens when we get disconnected
-                    shared.debug(0,["Not connected, cannot send"])
+                    #shared.debug(0,["Not connected, cannot send"])
                     socketstop()
                     return False
                     

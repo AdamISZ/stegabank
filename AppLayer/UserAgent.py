@@ -191,7 +191,7 @@ class UserAgent(Agent.Agent):
                         shared.debug(0,["Error, received bank session request but not seller"])
                         continue
                     else:
-                        self.sendMessage('RE_BANK_SESSION_START_ACCEPTED:', txID=t.uniqID(),chanIndex=1)
+                        self.sendMessage('RE_BANK_SESSION_START_ACCEPTED:',recipientID='RE', txID=t.uniqID(),chanIndex=1)
                         self.startBankingSession(t)
                         continue
                 
@@ -250,7 +250,7 @@ class UserAgent(Agent.Agent):
         if len(self.workingContract.signatures.keys())>1:
             shared.debug(0,["\n **Sending a complete contract to the escrow**\n"])
             self.persistContract(self.workingContract)
-            self.sendMessage(msg,recipientID=g("Escrow","escrow_id"),\
+            self.sendMessage(msg,recipientID='CNE',\
                              txID=self.workingContract.textHash) 
         self.sendMessage(msg,\
             recipientID=self.workingContract.getCounterparty(self.uniqID()),\
@@ -437,7 +437,8 @@ class UserAgent(Agent.Agent):
                 shared.debug(0,["Trying to open a keyfile:",kf])
                 keys.append(f.readline())
         shared.debug(0,["Set keys to:",keys])
-        self.sendMessage('RE_SSL_KEYS_SEND:'+','.join(keys),txID=transaction.uniqID())
+        self.sendMessage('RE_SSL_KEYS_SEND:'+','.join(keys),recipientID='RE',\
+                         txID=transaction.uniqID())
         
     #to be called after escrow accessor is initialised
     #and transaction list is synchronised.
@@ -568,7 +569,7 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
             "of the banking session!"])  
         #construct a message to the escrow
         shared.debug(0,["Sending bank session end confirm to seller and escrow"])
-        self.sendMessage('RE_BANK_SESSION_ENDED:'+rspns,txID=tx.uniqID())
+        self.sendMessage('RE_BANK_SESSION_ENDED:'+rspns,recipientID='RE',txID=tx.uniqID())
     
     def makeRedemptionSignature(self,transaction,toCounterparty=True):
         
@@ -706,7 +707,7 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
         #    if not msg:
         #        break
             
-        self.sendMessage('RE_TRANSACTION_SYNC_REQUEST:')
+        self.sendMessage('RE_TRANSACTION_SYNC_REQUEST:',recipientID='RE')
         
         while True:
             #wait for response; we don't expect a long wait as it's a low
@@ -729,6 +730,7 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
                 shared.debug(5,["Waiting for escrow response.."])
                 #TODO need some failure mode here
                 continue
+            print msg
             
             hdr,data = msg.values()[0].split(':')[0],':'.join(msg.values()[0].split(':')[1:])
             

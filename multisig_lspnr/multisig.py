@@ -390,7 +390,9 @@ def spendUtxos(addrOwner,addrOwnerID,payee,payers,amt=None):
         tmptx = mktx(finalUtxos,outs)
         pub,priv = getKeysFromUniqueID(addrOwnerID)
         for i,x in enumerate(finalUtxos):
-            tmptx = sign(tmptx,i,priv)        
+            tmptx = sign(tmptx,i,priv)
+        print tmptx
+        print deserialize(tmptx)
         rspns = ea.send_tx(tmptx)
         shared.debug(2,["Electrum server sent back:",rspns])
         return tx_hash(tmptx).encode('hex')        

@@ -161,20 +161,21 @@ class Agent(object):
         return self.btcAddress
 
 #========MESSAGING FUNCTIONS======================                   
-    def sendMessage(self,msg,recipientID=None,txID=None,chanIndex=0):
+    def sendMessage(self,msg,recipientID='CNE',txID=None,chanIndex=0):
         '''wrapper function for sending messages
         to a counterparty. Not all messages have an associated
         transactionid, so that is allowed to be null and is
         replaced by '0'. If recipientID is not set, it defaults
-        to the active escrow. A signature of the value of the 
+        to the active CNE. A signature of the value of the 
         single dict entry is appended to the value after the last ';'
         as identity authorization.
         '''
         if not txID:
             txID='0'
-        if not recipientID:
+        if recipientID in ['CNE','RE']:
             #TODO fix
-            recipientID = g("Escrow","escrow_id")
+            recipientID = recipientID+g("Escrow","escrow_id")
+            
         text,sig = multisig.signText(self.uniqID(),':'.join(msg.split(':')[1:]))
         
         newMsg = {}
@@ -186,12 +187,13 @@ class Agent(object):
         #For testing, both escrows on same MQ server
         self.sendMessage(messages,recipientID,transaction,chanIndex)
             
-    def getSingleMessage(self,timeout=1,chanIndex=0):
-        msg = Msg.getSingleMessage(self.uniqID(),timeout,chanIndex)
+    def getSingleMessage(self,timeout=1,chanIndex=0,prefix=None):
+        qname = prefix+self.uniqID() if prefix else self.uniqID()
+        msg = Msg.getSingleMessage(qname,timeout,chanIndex)
         if not msg:
             shared.debug(5,["Message layer returned none"])
             return None
-        #all messages from clients must be verified
+        #all messages must be verified
         sendingID = msg.keys()[0].split('.')[1]
         #retrieve pubkey
         msgInner = ';'.join(':'.join(msg.values()[0].split(':')[1:]).split(';')[:-1])
