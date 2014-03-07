@@ -55,29 +55,7 @@ import Messaging
 myself=None
 
 #if on RE, we focus on one transaction at a time
-txRE = None
-
-#TODO use ini file to set executable paths
-'''
-if shared.OS=='win':
-    stcppipe_exepath = os.path.join(ddir,'stcppipe', 'stcppipe.exe')
-    tshark_exepath = os.path.join(ddir,'wireshark', 'tshark.exe')
-    mergecap_exepath = os.path.join(ddir,'wireshark', 'mergecap.exe')
-    plink_exepath = os.path.join(ddir, 'plink.exe')    
-if shared.OS=='linux':
-    stcppipe_exepath = os.path.join(ddir,'stcppipe', 'stcppipe')
-    tshark_exepath = 'tshark'
-    mergecap_exepath = 'mergecap'
-    
-firefox_exepath = 'firefox'
-ssh_exepath = 'ssh'
-'''
-#local port for ssh's port forwarding. Will be randomly chosen upon starting the tunnel
-random_ssh_port = 0
-#random TCP port on which firefox extension communicates with python backend
-FF_to_backend_port = 0
-#random port which FF uses as proxy port. Local stcppipe listens on this port and forwards traffic to random_ssh_port
-FF_proxy_port = 0
+txRE = None    
 
 #a thread which returns a value. This is achieved by passing self as the first argument to a called function
 #the calling function can then set self.retval
@@ -85,169 +63,17 @@ class ThreadWithRetval(threading.Thread):
     def __init__(self, target):
         super(ThreadWithRetval, self).__init__(target=target, args = (self,))
     retval = ''
-
-class StoppableHttpServer (BaseHTTPServer.HTTPServer):
-    """http server that reacts to self.stop flag"""
-    retval = ''
-    def serve_forever (self):
-        """Handle one request at a time until stopped. Optionally return a value"""
-        self.stop = False
-        while not self.stop:
-                self.handle_request()
-        return self.retval;
-
-#Receive HTTP HEAD requests from FF extension. This is how the extension communicates with python backend.
-class buyer_HandlerClass(SimpleHTTPServer.SimpleHTTPRequestHandler, object):
-    protocol_version = "HTTP/1.1"      
-    global qFrontEnd
-        
-    def do_HEAD(self):
-        global ssh_proc
-        global stcppipe_proc
-        global is_ssh_session_active                    
-                
-        if self.path.startswith('/sign_tx'):
-            print 'Received signing request'
-            raddr,mbal,myid,cpid = urllib2.unquote(self.path.split('?')[1]).split()
-            print 'Received a destination address: '+raddr
-            print 'Received an owned balance: '+mbal
-            print 'Received an owned id: '+myid
-            print 'Received a ctrprty id: '+cpid
-            sig = multisig.create_sig_for_redemption(myid,myid,cpid,mbal,0.0001,raddr)
-            
-            self.send_response(200)
-            self.send_header("response","sign_tx")
-            if (sig):
-                self.send_header("result","success")
-            else:
-                self.send_header("result","failure")
-            self.end_headers()
-            return
-            
-        if self.path.startswith('/get_balance'):
-            print 'Received a request to get the balance'
-            addr = urllib2.unquote(self.path.split('?')[1])
-            conf,unconf = multisig.check_balance_at_multisig('x','x',addr=addr)
-            print 'got an unconf balance of: '+str(unconf)
-            self.send_response(200)
-            self.send_header("response","get_balance")
-            self.send_header("confirmedbalance",str(conf))
-            self.send_header("unconfirmedbalance",str(unconf))
-            self.end_headers()
-            return
-            
-        #chat message format going TO oracle: '<uniqueid_recipient> <type> [data..]'
-        if self.path.startswith('/send_chat'):
-            print 'Received a chat message send request'
-            #need everything after the first question mark, including question marks
-            chatdata = '?'.join(self.path.split('?')[1:])
-            chatdata = urllib2.unquote(chatdata)
-            params = chatdata.split()
-            if len(params[0]) != 64:
-                print 'Error: id of recipient wrong length'
-            print 'recipient is: '+params[0]
-            print 'type is: '+params[1]
-            print 'message is: '+' '.join(params[2:])
-            send_chat_to_oracle(params[0],params[1],' '.join(params[2:]))
-            print 'Received a chat message and sent to oracle'
-            self.send_response(200)
-            self.send_header("response","send_chat")
-            self.end_headers()
-            return
-        
-        #chat message format coming FROM oracle: '<uniqueid_sender> <type> [data...]' 
-        if self.path.startswith('/receive_chat'):
-            m=''
-            type=''
-            value=''
-            sender=''
-            try:  
-                m = q.get_nowait()
-                if not m.strip().split():
-                    sender = 'none'
-                else:
-                    sender = m.split()[0]
-                    type = m.split()[1]
-                    value = ' '.join(m.split()[2:])
-            except Queue.Empty:
-                pass
-            if not m:
-                sender='none'
-            self.send_response(200)
-            self.send_header("response","receive_chat")
-            self.send_header("sender",sender)
-            self.send_header("type",type)
-            self.send_header("value",value)
-            self.end_headers()
-            return
-        
-        if self.path.startswith('/start_tunnel'):
-            arg_str = self.path.split('?')[1]
-            args = arg_str.split(";")
-            if ALPHA_TESTING:
-                key_name = "alphatest.txt"
-            global assigned_port
-            assigned_port = args[1]
-            retval = start_tunnel(key_name, args[0])
-            print 'Sending back: '+retval + assigned_port
-            if retval == 'reconnect':
-                self.send_response(200)
-                self.send_header("response", "start_tunnel")
-                #assigned_port now contains the new port which sshd wants us to reconnect to
-                self.send_header("value", "reconnect;"+assigned_port)
-                self.end_headers()                
-            if retval != 'success':
-                print 'Error while setting up a tunnel: '+retval
-            self.send_response(200)
-            self.send_header("response", "start_tunnel")
-            self.send_header("value", retval)
-            self.end_headers()
-            return     
-        
-        if self.path.startswith('/terminate'):
-            if is_ssh_session_active: 
-                os.kill(stcppipe_proc.pid, signal.SIGTERM)
-                ssh_proc.stdin.write("exit\n")
-                ssh_proc.stdin.flush()
-                is_ssh_session_active = False              
-            self.send_response(200)
-            self.send_header("response", "terminate")
-            self.send_header("value", "success")
-            self.end_headers()
-            time.sleep(2)
-            return      
-            
-        if self.path.startswith('/started'):
-            global is_ff_started
-            is_ff_started = True
-            self.send_response(200)
-            self.send_header("response", "started")
-            self.send_header("value", "success")
-            self.end_headers()
-            return
-
-#use miniHTTP server to receive commands from Firefox addon and respond to them
-def start_minihttp_thread(parentthread):
-    global FF_to_backend_port
-    print 'Starting mini http server to communicate with Firefox plugin'
-    try:
-        httpd = StoppableHttpServer(('127.0.0.1', FF_to_backend_port), buyer_HandlerClass)
-    except Exception, e:
-        print 'Error starting mini http server', e
-        exit(1)
-    sa = httpd.socket.getsockname()
-    print "Serving HTTP on", sa[0], "port", sa[1], "..."
-    retval = httpd.serve_forever()
     
-#this basically just consists of asking the
-#escrow if the counterparty is currently online
-def initiateChatWithCtrprty(myself,ctrprty):
+def sendCtrprtyAliveRequest(myself,ctrprty,prefix='CNE'):
     msg = 'QUERY_STATUS:'+ctrprty    
-    myself.sendMessage(msg,recipientID='CNE')
+    myself.sendMessage(msg,recipientID=prefix)
+    
+    #TODO: this code doesn't work asynchronously, and needs work anyway!
     rspns = myself.getSingleMessage(timeout=5)
-    for k,v in rspns.iteritems():
-        if 'ONLINE' in m:
-            return True
+    if rspns:
+        for k,m in rspns.iteritems():
+            if 'QUERY_STATUS_RESPONSE:ONLINE' in m:
+                return True
     return False
 
 def sendChatToCtrprty(myself,ctrprty,msgToSend,txID=None):
@@ -289,11 +115,6 @@ if __name__ == "__main__":
     #need a connection to an escrow to do anything
     Msg.instantiateConnection()
     
-    #FF_to_backend_port = random.randint(1025,65535)
-    #FF_proxy_port = random.randint(1025,65535)
-    #thread = ThreadWithRetval(target= start_minihttp_thread)
-    #thread.daemon = True
-    #thread.start()  
     
     #read in contract details (for early testing only)
     contractDetails = {}
@@ -324,6 +145,12 @@ if __name__ == "__main__":
                 #necessary because empty queue raises Exception
                 pass
         '''
+        try:
+            #primitive implementation of display to user
+            shared.debug(0,["Earlier, received this from MQ:",myself.qFrontEnd.get_nowait()])
+        except:
+            #necessary because empty queue raises Exception
+            pass        
         if RE:
             print """You are on RE. Please choose an option:
             [1] Show current transactions and choose one 
@@ -501,18 +328,32 @@ if __name__ == "__main__":
                     print "you attempted to send an unsigned contract"
             elif choice == 2:
                 text = shared.get_validated_input("Enter chat message:",str)
-                #TODO
-                #sendChatToCtrprty(ctrprty,text)
+                #default is counterparty in current contract
+                c = shared.get_validated_input("Enter counterparty (BTC Address), or 0 for \
+                default counterparty i.e. specified in contract",str)
+                if c=='0':
+                    ctrprty1 =myself.workingContract.text['Buyer BTC Address']
+                    ctrprty2 = myself.workingContract.text['Seller BTC Address']
+                    ctrprty = ctrprty1 if ctrprty2==myBtcAddress else ctrprty2
+                else:
+                    ctrprty = c
+                sendChatToCtrprty(myself,ctrprty,text)
                 
             elif choice == 3:
                 exit(0)
                 
             elif choice == 4:
-                if not ctrprty:
-                    print "You have to set the counterparty first!\n"
-                    continue
-                #TODO
-                #sendCtrprtyAliveRequest(ctrprty,myEscrow)
+                #default is counterparty in current contract
+                c = shared.get_validated_input("Enter counterparty (BTC Address), or 0 for \
+                default counterparty i.e. specified in contract",str)
+                if c=='0':
+                    ctrprty1 = myself.workingContract.text['Buyer BTC Address']
+                    ctrprty2 = myself.workingContract.text['Seller BTC Address']
+                    ctrprty = ctrprty1 if ctrprty2==myBtcAddress else ctrprty2
+                else:
+                    ctrprty = c
+                answer = sendCtrprtyAliveRequest(myself,ctrprty)
+                shared.debug(0,["Escrow reports that",ctrprty,"-s online status is:",answer])
                 
             
             elif choice == 5:

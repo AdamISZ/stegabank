@@ -80,6 +80,17 @@ class EscrowAgent(Agent.Agent):
                 verdict,data,contract = self.receiveContractCNE([k,m])
                 self.sendContractVerdictCNE(verdict,data,contract)
                 continue
+            
+            #TODO: this code is identical on RE and CNE;
+            #how to avoid replicating?
+            if 'QUERY_STATUS:' in m:
+                queryee = m.split(':')[1]
+                self.sendMessage('QUERY_STATUS:'+requester, recipientID=queryee) 
+            
+            if 'QUERY_STATUS_RESPONSE:' in m:
+                rspns,ctrprty = m.split(':')[1].split(',')
+                self.sendMessage('QUERY_STATUS_RESPONSE:'+rspns, recipientID=ctrprty)
+                
     
     def getMultisigAddress(self, tx, epk):
         multisig.escrow_pubkey = epk
@@ -237,7 +248,15 @@ class EscrowAgent(Agent.Agent):
                 transaction = self.getTxByID(txID)
                 self.receiveSSLKeysAndSendHtml([k,m])
                 
-    
+            #TODO: this code is identical on RE and CNE;
+            #how to avoid replicating?
+            elif 'QUERY_STATUS:' in m:
+                queryee = m.split(':')[1]
+                self.sendMessage('QUERY_STATUS:'+requester, recipientID=queryee) 
+            
+            elif 'QUERY_STATUS_RESPONSE' in m:
+                rspns,ctrprty = m.split(':')[1].split(',')
+                self.sendMessage('QUERY_STATUS_RESPONSE:'+rspns, recipientID=ctrprty)            
     
     def releaseFunds(self,transaction,toBuyer,sig):
         '''Provide signature for multisig release to buyer

@@ -136,11 +136,9 @@ class UserAgent(Agent.Agent):
         #infinite loop for getting messages
         while True:
             time.sleep(1)
-            
-            #if self.inboundMessagingExit:
-            #    return
                
             msg = self.getSingleMessage(chanIndex=1)
+            
             if not msg:
                 continue
             for k,m in msg.iteritems():
@@ -156,6 +154,13 @@ class UserAgent(Agent.Agent):
                                   ':'+':'.join(m.split(':')[1:]))
                     continue
                 
+                elif 'QUERY_STATUS:' in m:
+                    #was it RE or CNE?
+                    sender = k.split('.')[1]
+                    recipientID = 'RE' if sender.startswith('RE') else 'CNE'
+                    requester = m.split(':')[1]
+                    self.sendMessage('QUERY_STATUS_RESPONSE:ONLINE,'+requester, recipientID='CNE', chanIndex=1)
+                    
                 elif 'CNE_CONTRACT_SUCCESS' in m:
                     escrowAddressConfirmation,contractJSON,escrowSig =\
                         ':'.join(m.split(':')[1:]).split('|')
@@ -216,7 +221,7 @@ class UserAgent(Agent.Agent):
                 
                 elif 'RE_SSL_KEYS_REQUEST' in m:
                     transaction = self.getTxByID(k.split('.')[0])
-                    
+                  
                 else:
                     #catch all for messages which just go to the front end
                     shared.debug(0,["Putting this to the q,",m])
@@ -702,10 +707,11 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
     def synchronizeTransactions(self):
         
         #make absolutely sure we're not responding to stale data:
-        #while True:
-        #    msg = self.getSingleMessage()
-        #    if not msg:
-        #        break
+        while True:
+            try:
+                msg = self.qFrontEnd.get_nowait()
+            except:
+                break
             
         self.sendMessage('RE_TRANSACTION_SYNC_REQUEST:',recipientID='RE')
         
