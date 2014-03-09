@@ -71,11 +71,25 @@ def create_multisig_address(uniqueid1,uniqueid2):
     msigaddr = scriptaddr(mscript.decode('hex'))
     return (msigaddr,mscript)
 
-def createMultisigRaw(pubs):
+def createMultisigRaw(M,N,pubs):
     pubs.sort()
-    mscript = mk_multisig_script(pubs,2,3)
+    if len(pubs) != N:
+        raise Exception("Cannot create multisig address, need ",N,\
+                        "pubkeys, got",len(pubs),"pubkeys.")
+    
+    mscript = mk_multisig_script(pubs,M,N)
     msigaddr = scriptaddr(mscript.decode('hex'))
     return msigaddr
+
+def createMultisigRaw2(M,N,pubs):
+    pubs.sort()
+    if len(pubs) != N:
+        raise Exception("Cannot create multisig address, need ",N,\
+                        "pubkeys, got",len(pubs),"pubkeys.")
+    
+    mscript = mk_multisig_script(pubs,M,N)
+    msigaddr = scriptaddr(mscript.decode('hex'))
+    return (msigaddr,mscript)
 
 def get_ordered_pubkeys(uniqueid1,uniqueid2):
     global escrow_pubkey

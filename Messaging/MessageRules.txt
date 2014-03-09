@@ -23,6 +23,8 @@ Messaging Protocol for the ssl log escrow server running rabbitMQ:
 9. If the message is not one of [TRANSACTION_SYNC_REQUEST,TRANSACTION_SYNC_RESPONSE,TRANSACTION_SYNC_COMPLETE], then the first data item in (8) MUST be a new transaction state (in case of message TO escrow, this is a request which may or may not be agreed to; in case of message FROM escrow, this is a confirmation/statement of fact).
 
 10. List of MSGTYPES:
+ADJUDICATOR_APPLICATION - date are:multisig address,pubkey
+SELF_SHUTDOWN - date are: none
 QUERY_STATUS - data are: counterparty id (=btc address)
 QUERY_STATUS_RESPONSE - data are: 'ONLINE' or 'OFFLINE' or 'BUSY',counterparty id = btc address
 CNE_SIGNED_CONTRACT - data are: contract text (json)|signature

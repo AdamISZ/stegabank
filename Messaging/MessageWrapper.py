@@ -39,7 +39,16 @@ def instantiateConnection(un='guest',pw='guest',chanIndex=0):
                     g("Escrow","escrow_host")])
         exit(1)
 
-        
+def closeConnection():
+    global chan,conn
+    if not chan or not conn:
+        shared.debug(0,["Critical error, you tried to close the MQ connection but it doesn't exist"])
+        return
+    else:
+        for c in conn:
+            c.close()
+            shared.debug(0,["Connection to MQ closed"])
+            
 #interface: the arguments must be:
 #messages - a dict of form {'topic':'message','topic':'message',..}
 #recipientID - a unique ID representing one or more recipients - this will

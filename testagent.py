@@ -28,6 +28,7 @@ import json
 import Queue
 import BaseHTTPServer
 import SimpleHTTPServer
+import math
 from multisig_lspnr import multisig
 
 #for brevity
@@ -80,24 +81,32 @@ def sendChatToCtrprty(myself,ctrprty,msgToSend,txID=None):
     #tx will be set after contracts signed
     myself.sendMessage('CNE_CHAT:'+msgToSend,recipientID=ctrprty,txID=txID)     
 
-def changeEscrow():
+def getEscrowList():
+    return [e.split('|') for e in g("Escrow","escrow_list").split(',')]
+
+def changeEscrow(specific=None):
     shared.debug(0,["Current escrow:",g("Escrow","escrow_id")])
-    
-    #escrowList = zip(*(iter(g("Escrow","escrow_list").split('|')),)*3)
-    escrowList = [e.split('|') for e in g("Escrow","escrow_list").split(',')]
-    
-    for i,e in enumerate(escrowList):
-        print "["+str(i+1)+"] "+e[0]    
-    c = shared.get_validated_input("Choose an escrow",int)
+    if specific:
+        c = specific
+    else:
+        for i,e in enumerate(getEscrowList()):
+            print "["+str(i+1)+"] "+e[0]    
+        c = shared.get_validated_input("Choose an escrow",int)
+        
     if c not in range(1,len(escrowList)+1):
-        print "Invalid choice"
+        shared.debug(0,["Invalid choice from escrow list"])
     else:
         #rewrite the settings file and reset the escrow
+        #TODO: persist changes to config file
         shared.config.set("Escrow","escrow_id",value=escrowList[c-1][0])
         shared.config.set("Escrow","escrow_pubkey",value=escrowList[c-1][2])
-        shared.debug(2,["Set the escrow id to:",g("Escrow","escrow_id")])
-        shared.debug(2,["Set the escrow pubkey to:",g("Escrow","escrow_pubkey")])
+        shared.config.set("Escrow","escrow_host",value=escrowList[c-1][1])
+        shared.debug(2,["Set the escrow to host:",g("Escrow","escrow_host"),"id:",g("Escrow","escrow_id"),"pubkey:",g("Escrow","escrow_pubkey")])
         
+    Msg.closeConnection()
+    time.sleep(1)
+    Msg.instantiateConnection(un='client1',pw='client1',chanIndex=0)
+    
 if __name__ == "__main__":
     #first connect to CNE
     #code for reading order books and choosing escrow here?
@@ -113,7 +122,7 @@ if __name__ == "__main__":
     #initialise multisig
     multisig.initialise(p,d)
     #need a connection to an escrow to do anything
-    Msg.instantiateConnection()
+    Msg.instantiateConnection(un='guest', pw='guest')
     
     
     #read in contract details (for early testing only)
@@ -315,6 +324,7 @@ if __name__ == "__main__":
             [9] Modify and set the working contract
             [10] Purge old messages
             [11] Switch escrow
+            [12] Application for escrow status
             """
             choice = shared.get_validated_input("Enter an integer:",int)
             if choice in [1,2,4,5,6,7,9,10,11] and not myself:
@@ -423,10 +433,57 @@ if __name__ == "__main__":
             
             elif choice==11:
                 #TODO: code to deal with connection switch
+                myself.sendMessage('SELF_SHUTDOWN:', recipientID=myBtcAddress)
+                time.sleep(5)
                 changeEscrow()
+                time.sleep(5)
                 c = shared.get_binary_user_input("Do you want to use this as RE?",'y','y','n','n')
                 RE = True if c == 'y' else False
-                continue
                 
+                #for responding to messages from the escrow MQ server
+                receiverThread = ThreadWithRetval(target= myself.processInboundMessages)
+                receiverThread.daemon = True
+                receiverThread.start()
+                
+                continue
+            
+            elif choice==12:
+                #request to be adjudicator requires identity info
+                identityInfo = shared.get_validated_input("Enter identity info",str)
+                #construct list of pubkeys
+                escrowList = getEscrowList()
+                pubkeyList=[x[2] for x in escrowList]
+                mypub,mypriv = multisig.getKeysFromUniqueID(myself.uniqID())
+                pubkeyList.append(mypub)
+                
+                #majority M of N total:
+                N = len(pubkeyList)
+                if N>17:
+                    shared.debug(0,["Critical error: the total number of keys in this multisig address exceeds the maximum of 17 - aborting"])
+                    break
+                
+                M = math.floor(N/2)+1
+                msigaddr = multisig.createMultisigRaw(M, N, pubkeyList)
+                
+                shared.debug(0,["You have created this multisig address:",msigaddr])
+                shared.debug(0,["Please wait while your request is sent out to the pool."])
+                #broadcast
+                #TODO this is slow but ..?
+                for i,e in enumerate(escrowList):
+                    
+                    shared.config.set("Escrow","escrow_id",value=escrowList[i][0])
+                    shared.config.set("Escrow","escrow_pubkey",value=escrowList[i][2])
+                    shared.config.set("Escrow","escrow_host",value=escrowList[i][1])
+                    shared.debug(2,["Set the escrow to host:",g("Escrow","escrow_host"),"id:",g("Escrow","escrow_id"),"pubkey:",g("Escrow","escrow_pubkey")])                    
+                    
+                    Msg.closeConnection()
+                    time.sleep(1)
+                    
+                    Msg.instantiateConnection()
+                    
+                    myself.sendMessage('ADJUDICATOR_APPLICATION:'+','.join(msigaddr,mypub))
+                shared.debug(0,["Your application has been sent to all pool members. Please wait for their response."])
+                
+                    
             else:
                 print "invalid choice. Try again."

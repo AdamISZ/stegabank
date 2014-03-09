@@ -30,7 +30,8 @@ class EscrowAgent(Agent.Agent):
         #messaging server should always be local for escrow
         self.host='127.0.0.1'
         
-        Msg.instantiateConnection(un='escrow',pw='escrow')
+        #log in to message queue server
+        Msg.instantiateConnection(un=g("Agent","agent_rabbitmq_user"),pw=g("Agent","agent_rabbitmq_pass"))
         
         #hardcoded for testing TODO
         self.escrowID=btcaddress
@@ -96,7 +97,7 @@ class EscrowAgent(Agent.Agent):
         multisig.escrow_pubkey = epk
         bpk = tx.getCtrprtyPubkey(True)
         spk = tx.getCtrprtyPubkey(False)
-        return multisig.createMultisigRaw([epk,bpk,spk])
+        return multisig.createMultisigRaw(2,3,[epk,bpk,spk])
         
 
     def processNewTxRE(self,msg):

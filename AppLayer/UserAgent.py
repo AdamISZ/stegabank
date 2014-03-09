@@ -63,64 +63,6 @@ class UserAgent(Agent.Agent):
         #passed from back-end to front-end
         self.qFrontEnd = Queue.Queue() 
         
-        #self.inboundMessagingExit=False
-        
-    #calling this function for a particular transaction means that the user
-    #has decided to carry out the required next action.
-    #def takeAppropriateActions(self, txID):
-        #tx = self.getTxByID(txID)
-        
-        ##tx.state must be in one of the 'pending' states:
-        #if tx.state not in [300,501,502,700,701,702,706,800]:
-            #return
-        
-        #if tx.state in [300,501]:
-            #self.doBankingSession(tx)
-            
-        #elif tx.state==700 or (tx.getRole(self.uniqID())=='buyer' and tx.state==702) \
-            #or (tx.getRole(self.uniqID())=='seller' and tx.state==701):
-            #my_ssl_data = ','.join(self.getHashList(tx))
-            #if tx.getRole(self.uniqID()) == 'buyer':
-                ##need to send the magic hashes telling the escrow which other hashes
-                ##to ignore in the comparison
-                #my_ssl_data += '^'+','.join(self.getMagicHashList(tx))
-                
-            #self.activeEscrow.sendMessages(messages=\
-            #{'x':'SSL_DATA_SEND:'+my_ssl_data},transaction=tx,rs=703)
-            
-        #elif tx.state==800 and tx.getRole(self.uniqID())=='buyer':
-            ##TODO: this action naturally fits a GUI; for now just get
-            ##user to choose one or more key numbers
-            #keydir = os.path.join(g("Directories","agent_base_dir"),\
-            #'_'.join([tx.getRole(self.uniqID()),tx.uniqID(),"banksession"]),"keys")
-            #print ("You have chosen to send ssl keys to the escrow."
-            #"Do this carefully. Check the folder: ", keydir ," and "
-            #"decide which key number or numbers to send by looking at the "
-            #"corresponding html in the html directory, then enter those "
-            #"numbers here one by one at the prompt. When finished, type 0.")
-            ##get a listing of all valid key files
-            #all_keys = os.listdir(keydir)
-            #requested_keys=[]
-            #while True:
-                #choice = shared.get_validated_input("Enter a number (0 to quit)",int)
-                #if choice == 0:
-                    #if not any(requested_keys):
-                        #print "Error, you must select at least one key."
-                    #else:
-                        #print "Keys will now be sent to escrow."
-                        #break
-                #else:
-                    #if str(choice)+'.key' not in all_keys:
-                        #print "That number does not correspond to an existing \
-                            #key, please try again."
-                    #else:
-                        #requested_keys.append(os.path.join(keydir,str(choice)+'.key'))
-                        
-            #self.sendSSLKeys(tx,requested_keys)
-            
-        #else:
-            #shared.debug(0,["Unexpected request to perform action on",\
-                            #"a transaction that doesn't need anything done."])
     
     def processInboundMessages(self,parentThread):
         '''messages coming from the "back end" (escrow MQ server) are picked up here.
@@ -142,6 +84,9 @@ class UserAgent(Agent.Agent):
             if not msg:
                 continue
             for k,m in msg.iteritems():
+                
+                if 'SELF_SHUTDOWN' in m:
+                    break
                 
                 if 'CNE_SIGNED_CONTRACT' in m:
                     response = self.receiveContractCNE(m)
