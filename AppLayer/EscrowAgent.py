@@ -119,7 +119,7 @@ class EscrowAgent(Agent.Agent):
             self.sendMessage('RE_CNE_TX_REJECT_RECEIPT:',recipientID='CNE'+sender,txID=tx.uniqID())
             return None
         #initiate the new multisig address for this transaction
-        tx.msigAddr = self.getMultisigAddress(tx,g("Escrow","escrow_pubkey"))
+        tx.msigAddr,tx.mscript = self.getMultisigAddress(tx,g("Escrow","escrow_pubkey"))
         
         #allow us to keep track of where the deposits are (fees also collected here) 
         tx.depositHash = btcTxhash       
@@ -320,7 +320,7 @@ class EscrowAgent(Agent.Agent):
         
         #generate multisig address on remote escrow
         epk = self.escrowList[chosenEscrow]['pubkey']
-        REMultisigAddr = self.getMultisigAddress(tx,epk)
+        REMultisigAddr,mscript = self.getMultisigAddress(tx,epk)
         shared.debug(0,["Generated multisig was: ", REMultisigAddr])
                
         #We include the escrow pubkey in the message so as to confirm

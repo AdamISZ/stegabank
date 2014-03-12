@@ -20,6 +20,7 @@ OS = platform.system()
 PINL = '\r\n' if OS == 'Windows' else '\n'
 hexdigits = set('0123456789abcdefABCDEF')
 defaultBtcTxFee=10000
+btcDustLimit=5640
 #controller of transaction state transitions (v=valid)
 #the value of encoding this is that we can greate a generic call
 #to validate whether messages coming into the escrow are asking for something

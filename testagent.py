@@ -463,7 +463,7 @@ if __name__ == "__main__":
                     break
                 
                 M = math.floor(N/2)+1
-                msigaddr = multisig.createMultisigRaw(M, N, pubkeyList)
+                msigaddr,mscript = multisig.createMultisigRaw(M, N, pubkeyList)
                 
                 shared.debug(0,["You have created this multisig address:",msigaddr])
                 shared.debug(0,["Please wait while your request is sent out to the pool."])
