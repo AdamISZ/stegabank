@@ -63,7 +63,68 @@ class UserAgent(Agent.Agent):
         #passed from back-end to front-end
         self.qFrontEnd = Queue.Queue() 
         
+    #for refunds
+    def writeCollateralSignature(self,pubkey,signature):
+        with open(g("Escrow","adjudicator_store")) as f:
+            f.write('REFUND PAYMENT SIGNED BY:'+pubkey+','+signature+shared.PINL)
+        
+    #for application approvals    
+    def writeAdjudicatorApplicationApproval(self,adjudicatorIdentity,comment):
+        with open(g("Escrow","adjudicator_store"),'a') as f:
+            f.write('APPLICATION FOR ADJUDICATION ACCEPTED BY:'+','.join([adjudicatorIdentity,comment,shared.PINL]))
     
+    def getEscrowList(self):
+        return [e.split('|') for e in g("Escrow","escrow_list").split(',')]
+    
+    def createCollateralMultisig(self):
+        #request to be adjudicator requires identity info
+        #construct list of pubkeys
+        escrowList = self.getEscrowList()
+        pubkeyList=[x[2] for x in escrowList]
+        mypub,mypriv = multisig.getKeysFromUniqueID(self.uniqID())
+        pubkeyList.append(mypub)
+        pubkeyList.sort()
+        shared.debug(0,["Here are the pubkeys:",pubkeyList])
+        #majority M of N total:
+        N = len(pubkeyList)
+        if N>15: #TODO magic number
+            shared.debug(0,["Critical error: the total number of keys in this multisig address exceeds the maximum of 17 - aborting"])
+            return None,None
+        
+        M = int(math.floor(N/2)+1)
+        msigaddr,mscript = multisig.createMultisigRaw(M, N, pubkeyList)
+        return (msigaddr,mscript)
+
+    def allAdjudicatorsAcceptedApplication(self):
+        with open(g("Escrow","adjudicator_store")) as f:
+            content = f.readlines()
+        filtered = [x for x in content if 'APPLICATION FOR ADJUDICATION ACCEPTED BY' in x]
+        identities = [x.split(',')[0].split(':')[1] for x in filtered]
+        adjudicatorIdentities = [x[0] for x in [e.split('|') for e in g("Escrow","escrow_list").split(',')]]
+        if set(adjudicatorIdentities) != set(identities):
+            shared.debug(5,["Not all adjudicators have yet accepted the application"])
+            return
+        #we are ready to make the collateral payment
+        rspns = shared.get_binary_user_input('Your application for adjudicator role has been accepted. Are you ready to make the payment of '+g("Escrow","escrow_collateral_size")+" satoshis?",'y','y','n','n')
+        if rspns != 'y':
+            return
+        #create the transaction and present it to the user for verification
+        #we must be VERY careful here as the amount is large
+        msigaddr, mscript = self.createCollateralMultisig()
+        if not msigaddr or not mscript:
+            raise Exception("This should not be possible.")
+        
+        collSize = g("Escrow","escrow_collateral_size")
+        multisig.spendUtxos(self.uniqID(),self.uniqID(), msigaddr, None, amt=int(collSize),prepare=True)
+        rspns = shared.get_binary_user_input('Do you still want to pay?','y','y','n','n')
+        if rspns != 'y':
+            return
+        #we have confirmation after checking; broadcast
+        multisig.spendUtxos(self.uniqID(),self.uniqID(),msigaddr,None,amt=int(collSize))
+        
+        shared.debug(0,["Congratulations, you are now a member of the pool. Please contact the other pool members on instructions for setting up the server."])
+        
+        
     def processInboundMessages(self,parentThread):
         '''messages coming from the "back end" (escrow MQ server) are picked up here.
         Message syntax will be the same for front end and back end communication, 
@@ -87,7 +148,7 @@ class UserAgent(Agent.Agent):
                 
                 if 'SELF_SHUTDOWN' in m:
                     break
-                
+                    
                 if 'CNE_SIGNED_CONTRACT' in m:
                     response = self.receiveContractCNE(m)
                     #let the front end know we got it etc.
@@ -724,39 +785,3 @@ g("Escrow","escrow_host")+':'+g("Escrow","escrow_stcp_port")+':127.0.0.1:'\
         self.printCurrentTransactions()
         
         return True  
-    
-    
-    #this method is at useragent level only as it's only for buyers
-    #see details in sharkutils.get_magic_hashes
-    def getMagicHashList(self, tx):
-        if (tx.getRole(self.uniqID()) != 'buyer'):
-            shared.debug(0,["Error! You cannot send the magic hashes unless"\
-                            "you\'re the buyer!"])
-            exit(1)
-            
-        txdir = os.path.join(g("Directories","agent_base_dir"),\
-                        '_'.join(["buyer",tx.uniqID(),"banksession"]))
-        stcpdir = os.path.join(txdir,"stcplog")
-        kf = os.path.join(txdir,'_'.join(['buyer',tx.uniqID(),'banksession.keys']))
-        shared.debug(0,["Trying to find any magic hashes located in:",\
-                    stcpdir,"using ssl decryption key:",kf])
-        return sharkutils.get_magic_hashes(stcpdir,kf,\
-                                        port=g("Agent","agent_stcp_port"))
-        
-    #unused for now
-    def findEscrow(self):
-        print "finding escrow\n"
-        self.escrow = EscrowAgent()
-    
-    def addEscrow(self,escrow):
-        self.escrows.append(escrow)
-        return self
-    
-    def setActiveEscrow(self,escrow):
-        if escrow in self.escrows:
-            self.activeEscrow = escrow 
-        else:
-            raise Exception("Attempted to set active an escrow which is not known to this user agent!.\n")
-        return self
-        
-    

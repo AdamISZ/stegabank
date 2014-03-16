@@ -106,6 +106,35 @@ def changeEscrow(specific=None):
     Msg.closeConnection()
     time.sleep(1)
     Msg.instantiateConnection(un='client1',pw='client1',chanIndex=0)
+
+def sendAdjudicatorCollateralSigningRequest(myself,identityInfo,collateralAmount):
+    
+    msigaddr,mscript = myself.createCollateralMultisig()
+    if not msigaddr or not mscript:
+        shared.debug(0,["Critical error: cannot create a multisignature address."])
+        return False
+    mypub,mypriv = multisig.getKeysFromUniqueID(myself.uniqID())
+    
+    shared.debug(0,["You have created this multisig address:",msigaddr])
+    shared.debug(0,["Please wait while your request is sent out to the pool."])
+    #broadcast
+    #TODO this is slow but ..?
+    for i,e in enumerate(getEscrowList()):
+        
+        shared.config.set("Escrow","escrow_id",value=e[0])
+        shared.config.set("Escrow","escrow_pubkey",value=e[2])
+        shared.config.set("Escrow","escrow_host",value=e[1])
+        shared.debug(2,["Set the escrow to host:",g("Escrow","escrow_host"),"id:",g("Escrow","escrow_id"),"pubkey:",g("Escrow","escrow_pubkey")])                    
+        
+        #Msg.closeConnection()
+        time.sleep(1)
+        
+        Msg.instantiateConnection()
+        
+        myself.sendMessage('ADJUDICATOR_APPLICATION:'+'|'.join([msigaddr,mypub,identityInfo]))
+    shared.debug(0,["Your application has been sent to all pool members. Please wait for their response."])
+    return True
+                
     
 if __name__ == "__main__":
     #first connect to CNE
@@ -325,9 +354,10 @@ if __name__ == "__main__":
             [10] Purge old messages
             [11] Switch escrow
             [12] Application for escrow status
+            [13] Review adjudicator application responses
             """
             choice = shared.get_validated_input("Enter an integer:",int)
-            if choice in [1,2,4,5,6,7,9,10,11] and not myself:
+            if choice in [1,2,4,5,6,7,9,10,11,12,13] and not myself:
                 print "You need to set an identity first."
                 continue
             
@@ -448,42 +478,43 @@ if __name__ == "__main__":
                 continue
             
             elif choice==12:
-                #request to be adjudicator requires identity info
                 identityInfo = shared.get_validated_input("Enter identity info",str)
-                #construct list of pubkeys
-                escrowList = getEscrowList()
-                pubkeyList=[x[2] for x in escrowList]
-                mypub,mypriv = multisig.getKeysFromUniqueID(myself.uniqID())
-                pubkeyList.append(mypub)
-                
-                #majority M of N total:
-                N = len(pubkeyList)
-                if N>17:
-                    shared.debug(0,["Critical error: the total number of keys in this multisig address exceeds the maximum of 17 - aborting"])
-                    break
-                
-                M = math.floor(N/2)+1
-                msigaddr,mscript = multisig.createMultisigRaw(M, N, pubkeyList)
-                
-                shared.debug(0,["You have created this multisig address:",msigaddr])
-                shared.debug(0,["Please wait while your request is sent out to the pool."])
-                #broadcast
-                #TODO this is slow but ..?
-                for i,e in enumerate(escrowList):
+                if not sendAdjudicatorCollateralSigningRequest(myself,identityInfo, \
+                                                          g("Escrow","escrow_collateral_size")):
+                    shared.debug(0,["Request failed"])
+                continue
+            
+            elif choice==13:
+                #we connect to each *other* escrow in turn, checking for adjudicator
+                #acceptances; if we got all of them, we prompt the user to provide
+                #collateral to join
+                eL = getEscrowList()
+                for e in eL:
+                    Msg.instantiateConnectionExternal(e[1])
+                    msg = myself.getSingleMessage(timeout=5,external=True)
+                    print "got this message:",msg
+                    if msg:
+                        for k,m in msg.iteritems():
+                            if 'ADJUDICATOR_APPLICATION_ACCEPTED' in m:
+                                comment = m.split(':')[1]
+                                myself.qFrontEnd.put('APPLICATION FOR ADJUDICATOR ROLE ACCEPTED:'+comment)
+                                #persist the acceptance to file, but note the signature in the log file
+                                #is the actual proof
+                                myself.writeAdjudicatorApplicationApproval(k.split('.')[1],comment)
+                                
+                                #if all have accepted, join the pool by broadcasting the collateral
+                                #(with a warning of course)
+                                
+                                continue
+                            
+                            if 'ADJUDICATOR_APPLICATION_REJECTED' in m:
+                                reason = m.split(':')[1]
+                                myself.qFrontEnd.put('APPLICATION FOR ADJUDICATOR ROLE REJECTED:'+ reason)
+                                #no need to store here
+                    Msg.closeConnection(external=True)
                     
-                    shared.config.set("Escrow","escrow_id",value=escrowList[i][0])
-                    shared.config.set("Escrow","escrow_pubkey",value=escrowList[i][2])
-                    shared.config.set("Escrow","escrow_host",value=escrowList[i][1])
-                    shared.debug(2,["Set the escrow to host:",g("Escrow","escrow_host"),"id:",g("Escrow","escrow_id"),"pubkey:",g("Escrow","escrow_pubkey")])                    
-                    
-                    Msg.closeConnection()
                     time.sleep(1)
-                    
-                    Msg.instantiateConnection()
-                    
-                    myself.sendMessage('ADJUDICATOR_APPLICATION:'+','.join(msigaddr,mypub))
-                shared.debug(0,["Your application has been sent to all pool members. Please wait for their response."])
-                
-                    
+                myself.allAdjudicatorsAcceptedApplication()
+                                    
             else:
                 print "invalid choice. Try again."

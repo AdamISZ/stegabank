@@ -1,4 +1,5 @@
 import os
+import time
 import shared
 import pickle
 import hashlib
@@ -17,7 +18,7 @@ tdbLock = threading.Lock()
 #escrows,buyers,sellers
 class Agent(object):
     
-    def __init__(self, basedir='',btcadd='',currency='USD'):
+    def __init__(self, basedir='',btcadd='',currency='USD',txStore=True):
         print "instantiating an agent"
         #all agents must have a base directory for storing data
         self.baseDir = basedir
@@ -29,9 +30,14 @@ class Agent(object):
         self.OS = shared.OS
         #all agents have to be able to set up simple tcp pipes
         self.stcppipe_proc=None
+        
+        #agents may or may not store transaction records
+        self.txStore = txStore
+        
         #persistent store of incomplete transactions connected to this agent;
         #initially empty
-        self.reloadTransactions()
+        if self.txStore:
+            self.reloadTransactions()
         
 
     def getEscrowList(self):
@@ -46,6 +52,8 @@ class Agent(object):
             return y 
     
     def reloadTransactions(self):
+        if not self.txStore:
+            return
         tdbLock.acquire()
         try:
             self.txFile = os.path.join(self.baseDir,'transactions'+self.btcAddress+'.p')
@@ -65,6 +73,9 @@ class Agent(object):
             Otherwise, the transaction can be set either with a tx object
             or an ID. The new state should be defined (see Transaction.Transaction)
             if it's not, the transaction will be deleted from the store '''       
+        
+        if not self.txStore:
+            return
         
         #a little error checking:
         if new_state:
@@ -115,6 +126,9 @@ class Agent(object):
             
     #print out all transactions, indexed, to stdout
     def printCurrentTransactions(self):
+        if not self.txStore:
+            return
+        
         print "**Current Transactions in your transaction store:**"
         for i in range(0,len(self.transactions)):
             print "[",str(i),"] - ",self.transactions[i].uniqID(),\
@@ -124,6 +138,8 @@ class Agent(object):
     
     #self-expl
     def getTxByID(self,txID):
+        if not self.txStore:
+            return
         if not self.transactions:
             return None
         else:
@@ -134,28 +150,10 @@ class Agent(object):
                 return match[0]
     
     def getTxByIndex(self,index):
-        return self.transactions[index]
-    
-    #keeping this as simple as possible - will return None if data wasn't collected
-    def getHashList(self, tx):
-        role = tx.getRole(self.uniqID())
-        #TODO: this may be unsafe
-        if role=='invalid':
-            role='escrow'
-        bds = 'escrow_base_dir' if role=='escrow' else 'agent_base_dir'
-            
-        hash_location = os.path.join(g("Directories",bds),\
-                        '_'.join([role,tx.uniqID(),"banksession"]),"stcplog")
-        shared.debug(0,["Trying to find the hashes in this directory:",hash_location])
-        if role=='escrow':
-            return sharkutils.get_all_ssl_hashes_from_capfile(hash_location,\
-        stcp_flag=True,port=g("Escrow",'escrow_stcp_port'))
-        else:
-            return sharkutils.get_all_ssl_hashes_from_capfile(hash_location,\
-        stcp_flag=True,port=g("Agent",'agent_stcp_port'))
+        if not self.txStore:
+            return
         
-    def initialiseNetwork(self):
-        print "setting up network architecture"
+        return self.transactions[index]
                   
     def uniqID(self):
         return self.btcAddress
@@ -187,13 +185,14 @@ class Agent(object):
         #For testing, both escrows on same MQ server
         self.sendMessage(messages,recipientID,transaction,chanIndex)
             
-    def getSingleMessage(self,timeout=1,chanIndex=0,prefix=None):
+    def getSingleMessage(self,timeout=1,chanIndex=0,prefix=None,external=False):
         qname = prefix+self.uniqID() if prefix else self.uniqID()
-        msg = Msg.getSingleMessage(qname,timeout,chanIndex)
+        msg = Msg.getSingleMessage(qname,timeout,chanIndex,external)
         if not msg:
             shared.debug(5,["Message layer returned none"])
             return None
         #all messages must be verified
+        shared.logToFile(g("Directories","agent_base_dir"),"Signed message received:"+msg.keys()[0]+':'+msg.values()[0]+ " at time:"+str(time.time()))
         sendingID = msg.keys()[0].split('.')[1]
         #retrieve pubkey
         msgInner = ';'.join(':'.join(msg.values()[0].split(':')[1:]).split(';')[:-1])

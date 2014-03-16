@@ -21,8 +21,26 @@ import time
 EXCN = 'ssllog_main'
 chan = [None,None]
 conn = [None,None]
+connExternal = None
+chanExternal = None
 #+++++++++++++++++++++++++++++++++++
 
+def instantiateConnectionExternal(escrowHost,un='guest',pw='guest'):
+    global connExternal
+    global chanExternal
+    try:
+        pp = 'amqp://'+un+':'+pw+'@'+escrowHost+':'+g("Escrow","rabbitmq_port")+'/%2f'
+        shared.debug(0,["Set parameter string to:",pp])
+        parameters = pika.URLParameters(pp)
+        connExternal = pika.BlockingConnection(parameters)
+        chanExternal = connExternal.channel()
+        shared.debug(2,["Connection instantiated successfully to MQ"])
+        return True
+    except:
+        #TODO handle connection failure gracefully
+        shared.debug(0,["Critical error: cannot connect to host:",escrowHost])
+        return False    
+        
 def instantiateConnection(un='guest',pw='guest',chanIndex=0):
     global chan,conn
     try:
@@ -39,15 +57,23 @@ def instantiateConnection(un='guest',pw='guest',chanIndex=0):
                     g("Escrow","escrow_host")])
         exit(1)
 
-def closeConnection():
-    global chan,conn
-    if not chan or not conn:
-        shared.debug(0,["Critical error, you tried to close the MQ connection but it doesn't exist"])
-        return
+def closeConnection(external=False):
+    if external:
+        global chanExternal,connExternal
+        if not chanExternal or not connExternal:
+            shared.debug(0,["Error, you tried to close a non-existent connection"])
+        else:
+            connExternal.close()
+            shared.debug(2,["Connection to external MQ closed"])
     else:
-        for c in conn:
-            c.close()
-            shared.debug(0,["Connection to MQ closed"])
+        global chan,conn
+        if not chan or not conn:
+            shared.debug(0,["Error, you tried to close a non-existent connection"])
+            return
+        else:
+            for c in conn:
+                c.close()
+                shared.debug(2,["Connection to MQ closed"])
             
 #interface: the arguments must be:
 #messages - a dict of form {'topic':'message','topic':'message',..}
@@ -83,13 +109,18 @@ def purgeMQ(recipientID,chanIndex=0):
     if chan[chanIndex]:
         chan[chanIndex].queue_delete(queue=recipientID)
     
-def getSingleMessage(recipientID,timeout=1,chanIndex=0):
-    global chan
-    chan[chanIndex].queue_declare(queue=recipientID)
+def getSingleMessage(recipientID,timeout=1,chanIndex=0,external=False):
+    if external:
+        global chanExternal,connExternal
+    else:
+        global chan
+    chanTmp = chan[chanIndex] if not external else chanExternal
+    
+    chanTmp.queue_declare(queue=recipientID)
     for i in range(1,timeout+1):
         #if timeout>1:
         time.sleep(1)
-        method_frame,header_frame,body = chan[chanIndex].basic_get(queue=recipientID,\
+        method_frame,header_frame,body = chanTmp.basic_get(queue=recipientID,\
                                                         no_ack=True)
         if not method_frame:
             continue

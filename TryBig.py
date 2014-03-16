@@ -66,3 +66,5 @@ if not txh:
     shared.debug(0,["Broadcast failed"])
 else:
     shared.debug(0,["Transaction was broadcast:",txh])
+
+

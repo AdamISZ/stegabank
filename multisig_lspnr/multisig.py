@@ -236,7 +236,8 @@ def spendUtxosDirect(addrOwner,addrOwnerID,payee,utxoList):
     #in this case we return amount spent for convenience
     return (total,tx_hash(tmptx).encode('hex'))    
 
-def spendUtxos(addrOwner,addrOwnerID,payee,payers,amt=None):
+
+def spendUtxos(addrOwner,addrOwnerID,payee,payers,amt=None,prepare=False):
     """
     Two cases: either a FIXED amount from ONE payer
     or an UNSPECIFIED amount (means all) from MULTIPLE payers
@@ -250,6 +251,8 @@ def spendUtxos(addrOwner,addrOwnerID,payee,payers,amt=None):
     Finally, should return False if the amounts in the utxos
     are not sufficient to deliver amt, and returns the tx
     hash if the spend was successful
+    If the prepare flag is set, do not send the transaction but 
+    only output the full transaction details at the highest debug level.
     """
     if not amt:
         utxoList=[]
@@ -304,11 +307,18 @@ def spendUtxos(addrOwner,addrOwnerID,payee,payers,amt=None):
         pub,priv = getKeysFromUniqueID(addrOwnerID)
         for i,x in enumerate(finalUtxos):
             tmptx = sign(tmptx,i,priv)
-        print tmptx
-        print deserialize(tmptx)
-        rspns = ea.send_tx(tmptx)
-        shared.debug(2,["Electrum server sent back:",rspns])
-        return tx_hash(tmptx).encode('hex')        
+            
+        debugLevel = 0 if prepare else 4
+        
+        shared.debug(debugLevel,[tmptx])
+        shared.debug(debugLevel,[deserialize(tmptx)])
+        
+        if not prepare:
+            rspns = ea.send_tx(tmptx)
+            shared.debug(2,["Electrum server sent back:",rspns])
+            return tx_hash(tmptx).encode('hex')        
+        else:
+            return None
     
 def getUtxos(payee,payer,arr=False):
     

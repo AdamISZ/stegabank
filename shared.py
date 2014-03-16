@@ -73,7 +73,23 @@ def makedir(dirlist):
     new_dir = os.path.join(*dirlist)
     if not os.path.exists(new_dir): os.makedirs(new_dir)
     return new_dir
-   
+
+def overwriteMatchingLine(fn,matchString,newLine):
+    '''Overwrites any line in file with name fn
+    which contains the string matchString
+    with the line newLine'''
+    with open(fn) as f:
+        existingLines = f.readlines()
+    newLines = []
+    for l in existingLines:
+        replacement = newLine if matchString in l else l
+        newLines.append(replacement)
+    with open(fn,'w') as f:
+        f.write(PINL.join(newLines))
+    return True
+
+    
+    
 #copy all files from remote_dir on the remote (escrow) server to the local_dir
 #directory on the local machine
 def get_remote_files(remote_files,local_dir,login,agent,dir=True):
@@ -152,6 +168,10 @@ def debug(level,message):
     if level <= int(config.get("Debug","level")):
         print 'function: ', inspect.stack()[1][3], \
         ': ',' '.join(str(x) for x in message)
+
+def logToFile(bdir,message):
+    with open(os.path.join(bdir,'log.log'),'a') as f:
+        f.write(str(time.time())+': '+message+PINL)
 
 def get_binary_user_input(query,option1,result1,option2,result2):
     while True:

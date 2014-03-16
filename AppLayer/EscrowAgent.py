@@ -36,7 +36,7 @@ class EscrowAgent(Agent.Agent):
         #hardcoded for testing TODO
         self.escrowID=btcaddress
         
-        self.superID = g("Escrow","super_id")
+        #self.superID = g("Escrow","super_id")
         
         #get the public list of escrows for propagation to RE
         self.escrowList = self.getEscrowList()
@@ -54,6 +54,11 @@ class EscrowAgent(Agent.Agent):
         multisig.initialise(p,d)        
         
     
+    def writeAdjudicatorApplication(self,message,applicant):
+        with open(g("Escrow","adjudicator_store"),'w') as f:
+            f.write('ADJUDICATOR_APPLICATION:'+'|'.join([applicant,message,'STATUS','UNRESOLVED'])+shared.PINL)
+            
+   
     def run(self,escrowRole='cne'):
         #the main loop to be called for the daemon meaning we're
         #listening for messages/requests/instructions from useragents.
@@ -76,6 +81,10 @@ class EscrowAgent(Agent.Agent):
             
             k,m = msg.items()[0]
             txID, requester = k.split('.')
+            
+            if 'ADJUDICATOR_APPLICATION:' in m:
+                self.writeAdjudicatorApplication(':'.join(m.split(':')[1:]),requester)
+                continue
             
             if 'CNE_SIGNED_CONTRACT:' in m:
                 verdict,data,contract = self.receiveContractCNE([k,m])
@@ -783,7 +792,7 @@ class EscrowAgent(Agent.Agent):
         m_k = tx.uniqID()+'.'+self.escrowID
         for a in htmlarray:
             self.sendMessage('DISPUTE_HTML_EVIDENCE:'+\
-                               str(a),recipientID=self.superID,txID=tx.uniqID())
+                               str(a),recipientID='ADJ'+self.uniqID(),txID=tx.uniqID())
             
         #arbiter has been notified; final action requires human intervention
         self.transactionUpdate(tx=tx,new_state=802)
